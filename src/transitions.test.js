@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   SESSION_STATUS, completeSession, correctCustody, makeInitialData, parseDemoState,
   recordIncomingCustody, recordOutgoingCustody, resolveFlag, selfReportMissedCheckout,
-  serializeDemoState, startSession,
+  saveEndDraftEvidence, serializeDemoState, startSession,
 } from "./transitions.js";
 
 const evidence = (stage, suffix = "x") => ["room", "cables"].map((category) => ({
@@ -112,4 +112,52 @@ test("admin correction can close an active session with mismatched custody", () 
   assert.equal(result.ok, true);
   assert.equal(result.state.rooms.find((item) => item.id === room.id).activeSessionId, null);
   assert.equal(result.state.sessions.find((item) => item.id === room.activeSessionId).status, SESSION_STATUS.INCOMPLETE);
+});
+
+test("partial end evidence is preserved when receipt recovery closes a session", () => {
+  const started = startA(makeInitialData(), "mr-1", "start-partial");
+  const room = started.state.rooms.find((item) => item.id === "mr-1");
+  const partial = [evidence("end", "partial")[0]];
+  const drafted = saveEndDraftEvidence(started.state, { roomId: room.id, sessionId: room.activeSessionId, actorId: "member-a", evidence: partial });
+  assert.equal(drafted.ok, true);
+  const recovered = recordIncomingCustody(drafted.state, { roomId: room.id, actorId: "member-b", reportedSource: { type: "member", id: "member-a" }, operationId: "recover-partial", expectedRoomVersion: room.version });
+  const closed = recovered.state.sessions.find((item) => item.id === room.activeSessionId);
+  assert.equal(closed.status, SESSION_STATUS.INCOMPLETE);
+  assert.equal(closed.endEvidence.length, 1);
+  assert.equal(closed.endEvidence[0].category, "room");
+});
+
+test("completing one room never changes another active room", () => {
+  let state = makeInitialData();
+  state = { ...state, rooms: state.rooms.map((room) => room.id === "mr-2" ? { ...room, keyHolderType: "member", keyHolderId: "member-a" } : room) };
+  const first = startA(state, "mr-1", "isolated-1");
+  const second = startA(first.state, "mr-2", "isolated-2");
+  const roomOne = second.state.rooms.find((item) => item.id === "mr-1");
+  const roomTwo = second.state.rooms.find((item) => item.id === "mr-2");
+  const completed = completeSession(second.state, { roomId: roomOne.id, sessionId: roomOne.activeSessionId, actorId: "member-a", evidence: evidence("end", "isolated"), disposition: { type: "member", id: "member-b" }, operationId: "complete-isolated", expectedRoomVersion: roomOne.version });
+  assert.equal(completed.ok, true);
+  assert.equal(completed.state.rooms.find((item) => item.id === "mr-2").activeSessionId, roomTwo.activeSessionId);
+  assert.equal(completed.state.sessions.find((item) => item.id === roomTwo.activeSessionId).status, SESSION_STATUS.ACTIVE);
+});
+
+test("admin correction recovers dangling pointers and duplicate active sessions", () => {
+  let state = makeInitialData();
+  state = { ...state, rooms: state.rooms.map((room) => room.id === "mr-1" ? { ...room, activeSessionId: "missing-session" } : room) };
+  let room = state.rooms.find((item) => item.id === "mr-1");
+  const dangling = correctCustody(state, { roomId: room.id, destination: { type: "location", id: "sw" }, reason: "Repair dangling pointer", operationId: "repair-dangling", expectedRoomVersion: room.version });
+  assert.equal(dangling.ok, true);
+  assert.equal(dangling.state.rooms.find((item) => item.id === room.id).activeSessionId, null);
+
+  const started = startA(makeInitialData(), "mr-1", "first-duplicate");
+  room = started.state.rooms.find((item) => item.id === "mr-1");
+  const duplicateSession = { ...started.state.sessions.find((item) => item.id === room.activeSessionId), id: "duplicate-active" };
+  const corrupt = { ...started.state, sessions: [duplicateSession, ...started.state.sessions] };
+  const recovered = correctCustody(corrupt, { roomId: room.id, destination: { type: "location", id: "sw" }, reason: "Close duplicate sessions", operationId: "repair-duplicates", expectedRoomVersion: room.version });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.state.sessions.filter((item) => item.roomId === room.id && item.status === SESSION_STATUS.ACTIVE).length, 0);
+  assert.equal(recovered.state.flags.filter((item) => item.type === "MISSING_END_CHECKOUT").length, 2);
+});
+
+test("malformed persisted data is rejected", () => {
+  assert.equal(parseDemoState('{"schemaVersion":2,"rooms":[],"sessions":[]}'), null);
 });

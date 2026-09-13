@@ -164,7 +164,8 @@ export function roomState(state, roomId) {
 }
 
 function audit(type, operationId, timestamp, actorId, details) {
-  return { id: makeId("audit", `${operationId}-${type}`), type, operationId, timestamp, actorId, details };
+  const subject = details.sessionId ?? details.flagId ?? details.roomId ?? "event";
+  return { id: makeId("audit", `${operationId}-${type}-${subject}`), type, operationId, timestamp, actorId, details };
 }
 
 function custodyEvent({ operationId, timestamp, roomId, mode, previous, reportedSource = null, next, actorId, relatedSessionId = null, reason = null, mismatch = false }) {
@@ -173,7 +174,7 @@ function custodyEvent({ operationId, timestamp, roomId, mode, previous, reported
 
 function missingCheckoutFlag({ operationId, timestamp, roomId, session, actorId, reason, evidence }) {
   return {
-    id: makeId("flag-missing", operationId),
+    id: makeId("flag-missing", `${operationId}-${session.id}`),
     type: FLAG_TYPE.MISSING_END_CHECKOUT,
     status: "OPEN",
     roomId,
@@ -398,28 +399,31 @@ export function correctCustody(state, command) {
   if (room.version !== expectedRoomVersion) return failure("INVALID_ROOM_STATE", state);
   if (!reason?.trim()) return failure("REASON_REQUIRED", state);
   if (!validHolder(destination?.type, destination?.id)) return failure("INVALID_DESTINATION", state);
+  const activeForRoom = state.sessions.filter((item) => item.roomId === roomId && item.status === SESSION_STATUS.ACTIVE);
   const session = room.activeSessionId
-    ? state.sessions.find((item) => item.id === room.activeSessionId && item.roomId === roomId && item.status === SESSION_STATUS.ACTIVE)
+    ? activeForRoom.find((item) => item.id === room.activeSessionId) ?? null
     : null;
   const previous = { type: room.keyHolderType, id: room.keyHolderId };
   const nextHolder = { type: destination.type, id: destination.id };
   let sessions = state.sessions;
   let flags = state.flags;
   let auditEvents = state.auditEvents;
-  let relatedSessionId = null;
+  const structuralIssue = validateState(state).some((issue) => issue.roomId === roomId && issue.code !== "ACTIVE_KEY_HOLDER_MISMATCH");
   const incompatible = session && !(nextHolder.type === "member" && nextHolder.id === session.memberId);
-  if (incompatible) {
-    const closed = closeIncompleteParts(state, { room, session, actorId, reason: "ADMIN_RECOVERY", timestamp, operationId });
-    sessions = state.sessions.map((item) => item.id === session.id ? closed.session : item);
+  const sessionsToClose = structuralIssue ? activeForRoom : incompatible ? [session] : [];
+  for (const activeSession of sessionsToClose) {
+    const closed = closeIncompleteParts(state, { room, session: activeSession, actorId, reason: "ADMIN_RECOVERY", timestamp, operationId });
+    sessions = sessions.map((item) => item.id === activeSession.id ? closed.session : item);
     flags = append(flags, closed.flag);
     auditEvents = append(auditEvents, closed.event);
-    relatedSessionId = session.id;
   }
+  const relatedSessionId = sessionsToClose.length === 1 ? sessionsToClose[0].id : null;
+  const clearPointer = sessionsToClose.length > 0 || (room.activeSessionId && !session);
   const event = custodyEvent({ operationId, timestamp, roomId, mode: "ADMIN_CORRECTION", previous, next: nextHolder, actorId, relatedSessionId, reason: reason.trim() });
   auditEvents = append(auditEvents, audit("KEY_CUSTODY_RECORDED", operationId, timestamp, actorId, event));
   const next = {
     ...state,
-    rooms: state.rooms.map((item) => item.id === roomId ? { ...item, activeSessionId: incompatible ? null : item.activeSessionId, version: item.version + 1, keyHolderType: nextHolder.type, keyHolderId: nextHolder.id } : item),
+    rooms: state.rooms.map((item) => item.id === roomId ? { ...item, activeSessionId: clearPointer ? null : item.activeSessionId, version: item.version + 1, keyHolderType: nextHolder.type, keyHolderId: nextHolder.id } : item),
     sessions,
     custodyEvents: append(state.custodyEvents, event),
     flags,
