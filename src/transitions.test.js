@@ -161,3 +161,22 @@ test("admin correction recovers dangling pointers and duplicate active sessions"
 test("malformed persisted data is rejected", () => {
   assert.equal(parseDemoState('{"schemaVersion":2,"rooms":[],"sessions":[]}'), null);
 });
+
+test("duplicate start and incoming receipt commands are idempotent", () => {
+  const state = makeInitialData();
+  const room = state.rooms.find((item) => item.id === "mr-1");
+  const startCommand = { roomId: room.id, actorId: "member-a", evidence: evidence("start", "duplicate"), operationId: "same-start", expectedRoomVersion: room.version };
+  const started = startSession(state, startCommand);
+  assert.equal(started.ok, true);
+  const duplicateStart = startSession(started.state, startCommand);
+  assert.equal(duplicateStart.code, "DUPLICATE_OPERATION");
+  assert.equal(duplicateStart.state.sessions.filter((item) => item.id === "session-same-start").length, 1);
+
+  const receiptRoom = state.rooms.find((item) => item.id === "mr-2");
+  const receiptCommand = { roomId: receiptRoom.id, actorId: "member-b", reportedSource: { type: "location", id: "sw" }, operationId: "same-receipt", expectedRoomVersion: receiptRoom.version };
+  const received = recordIncomingCustody(state, receiptCommand);
+  assert.equal(received.ok, true);
+  const duplicateReceipt = recordIncomingCustody(received.state, receiptCommand);
+  assert.equal(duplicateReceipt.code, "DUPLICATE_OPERATION");
+  assert.equal(duplicateReceipt.state.custodyEvents.filter((item) => item.operationId === "same-receipt").length, 1);
+});
