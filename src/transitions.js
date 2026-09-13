@@ -124,16 +124,18 @@ function validDestination(type, id, actorId) {
   return null;
 }
 
-export function hasRequiredEvidence(evidence, stage) {
+export function hasRequiredEvidence(evidence, stage, requireAvailable = false) {
   if (!Array.isArray(evidence)) return false;
   return ["room", "cables"].every((category) =>
-    evidence.some((item) => item?.stage === stage && item?.category === category && item.accepted === true && item.id),
+    evidence.some((item) => item?.stage === stage && item?.category === category && item.accepted === true && item.id && (!requireAvailable || (item.availability === "AVAILABLE" && item.previewUrl))),
   );
 }
 
 export function validateState(state) {
   const issues = [];
-  if (!state || state.schemaVersion !== 2 || !Array.isArray(state.rooms) || !Array.isArray(state.sessions)) {
+  if (!state || state.schemaVersion !== 2 || !Array.isArray(state.rooms) || !Array.isArray(state.sessions)
+    || !Array.isArray(state.custodyEvents) || !Array.isArray(state.flags) || !Array.isArray(state.auditEvents)
+    || !Array.isArray(state.processedOperations) || typeof state.revision !== "number") {
     return [{ code: "INVALID_SCHEMA", message: "Saved demo state has an unsupported structure." }];
   }
   for (const room of state.rooms) {
@@ -143,6 +145,7 @@ export function validateState(state) {
       const linked = state.sessions.find((session) => session.id === room.activeSessionId);
       if (!linked) issues.push({ code: "MISSING_ACTIVE_SESSION", roomId: room.id, message: `${room.name} points to a missing session.` });
       else if (linked.roomId !== room.id || linked.status !== SESSION_STATUS.ACTIVE) issues.push({ code: "INVALID_ACTIVE_SESSION", roomId: room.id, message: `${room.name} points to a non-active or different-room session.` });
+      else if (room.keyHolderType !== "member" || room.keyHolderId !== linked.memberId) issues.push({ code: "ACTIVE_KEY_HOLDER_MISMATCH", roomId: room.id, message: `${room.name}'s active session owner and recorded key holder do not match.` });
     } else if (activeForRoom.length) {
       issues.push({ code: "UNLINKED_ACTIVE_SESSION", roomId: room.id, message: `${room.name} has an active session that is not linked from the room.` });
     }
@@ -235,7 +238,7 @@ export function startSession(state, command) {
   if (derived.kind === "ACTIVE") return failure("ROOM_ALREADY_ACTIVE", state);
   if (expectedRoomVersion !== room.version) return failure("INVALID_ROOM_STATE", state);
   if (room.keyHolderType !== "member" || room.keyHolderId !== actorId) return failure("NOT_KEY_HOLDER", state);
-  if (!hasRequiredEvidence(evidence, "start")) return failure("INVALID_EVIDENCE", state);
+  if (!hasRequiredEvidence(evidence, "start", true)) return failure("INVALID_EVIDENCE", state);
   const sessionId = makeId("session", operationId);
   const session = { id: sessionId, roomId, memberId: actorId, startedAt: timestamp, closedAt: null, status: SESSION_STATUS.ACTIVE, startEvidence: evidence, endEvidence: [], endDraftEvidence: [], closure: null };
   const next = {
@@ -268,7 +271,7 @@ export function completeSession(state, command) {
   if (session.status !== SESSION_STATUS.ACTIVE) return failure("SESSION_NOT_ACTIVE", state);
   if (session.memberId !== actorId) return failure("WRONG_ACTOR", state);
   if (room.keyHolderType !== "member" || room.keyHolderId !== actorId) return failure("NOT_KEY_HOLDER", state);
-  if (!hasRequiredEvidence(session.startEvidence, "start") || !hasRequiredEvidence(evidence, "end")) return failure("INVALID_EVIDENCE", state);
+  if (!hasRequiredEvidence(session.startEvidence, "start") || !hasRequiredEvidence(evidence, "end", true)) return failure("INVALID_EVIDENCE", state);
   if (!disposition || !["retain", "member", "location"].includes(disposition.type)) return failure("INVALID_DESTINATION", state);
   if (disposition.type !== "retain") {
     const destinationError = validDestination(disposition.type, disposition.id, actorId);
@@ -390,12 +393,14 @@ export function resolveFlag(state, command) {
 export function correctCustody(state, command) {
   const { roomId, actorId = "admin-demo", destination, reason, operationId, timestamp = isoNow(), expectedRoomVersion } = command;
   const duplicate = begin(state, operationId); if (duplicate) return duplicate;
-  const derived = roomState(state, roomId);
-  if (!derived.room) return failure("ROOM_NOT_FOUND", state);
-  if (derived.room.version !== expectedRoomVersion) return failure("INVALID_ROOM_STATE", state);
+  const room = state.rooms.find((item) => item.id === roomId);
+  if (!room) return failure("ROOM_NOT_FOUND", state);
+  if (room.version !== expectedRoomVersion) return failure("INVALID_ROOM_STATE", state);
   if (!reason?.trim()) return failure("REASON_REQUIRED", state);
   if (!validHolder(destination?.type, destination?.id)) return failure("INVALID_DESTINATION", state);
-  const { room, session } = derived;
+  const session = room.activeSessionId
+    ? state.sessions.find((item) => item.id === room.activeSessionId && item.roomId === roomId && item.status === SESSION_STATUS.ACTIVE)
+    : null;
   const previous = { type: room.keyHolderType, id: room.keyHolderId };
   const nextHolder = { type: destination.type, id: destination.id };
   let sessions = state.sessions;

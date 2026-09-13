@@ -93,3 +93,23 @@ test("serialization marks temporary photo previews unavailable", () => {
   assert.equal(session.startEvidence[0].previewUrl, null);
   assert.equal(session.startEvidence[0].availability, "UNAVAILABLE_AFTER_RELOAD");
 });
+
+test("unavailable restored end drafts cannot complete checkout", () => {
+  const started = startA(makeInitialData(), "mr-1", "start-reload-end");
+  const room = started.state.rooms.find((item) => item.id === "mr-1");
+  const withDraft = { ...started.state, sessions: started.state.sessions.map((session) => session.id === room.activeSessionId ? { ...session, endDraftEvidence: evidence("end", "draft") } : session) };
+  const restored = parseDemoState(serializeDemoState(withDraft));
+  const result = completeSession(restored, { roomId: room.id, sessionId: room.activeSessionId, actorId: "member-a", evidence: restored.sessions.find((session) => session.id === room.activeSessionId).endDraftEvidence, disposition: { type: "retain" }, operationId: "complete-after-reload", expectedRoomVersion: room.version });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "INVALID_EVIDENCE");
+});
+
+test("admin correction can close an active session with mismatched custody", () => {
+  const started = startA(makeInitialData(), "mr-1", "start-inconsistent");
+  const inconsistent = { ...started.state, rooms: started.state.rooms.map((room) => room.id === "mr-1" ? { ...room, keyHolderId: "member-b" } : room) };
+  const room = inconsistent.rooms.find((item) => item.id === "mr-1");
+  const result = correctCustody(inconsistent, { roomId: room.id, destination: { type: "member", id: "member-b" }, reason: "Verified with current holder", operationId: "repair-inconsistent", expectedRoomVersion: room.version });
+  assert.equal(result.ok, true);
+  assert.equal(result.state.rooms.find((item) => item.id === room.id).activeSessionId, null);
+  assert.equal(result.state.sessions.find((item) => item.id === room.activeSessionId).status, SESSION_STATUS.INCOMPLETE);
+});

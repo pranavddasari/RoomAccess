@@ -182,7 +182,7 @@ function PhotoFlow({ stage, roomName, evidence, onChange, onComplete, continueLa
   const accepted = (category) => evidence.find((item) => item.category === category && item.stage === stage && item.accepted);
   const accept = (item) => onChange([...evidence.filter((existing) => !(existing.stage === stage && existing.category === item.category)), item]);
   const beginReplacement = (category) => onChange(evidence.filter((existing) => !(existing.stage === stage && existing.category === category)));
-  const ready = Boolean(accepted("room") && accepted("cables"));
+  const ready = [accepted("room"), accepted("cables")].every((item) => item?.availability === "AVAILABLE" && item.previewUrl);
   return <div className="flow-content"><p className="flow-intro">{stage === "start" ? "Before using the room, take two photos." : "Before leaving the room, take two photos."}</p>
     <PhotoCapture title="Overall room condition" label="Room Photo" stage={stage} category="room" acceptedEvidence={accepted("room")} onReplacementSelected={beginReplacement} onAccept={accept} />
     <PhotoCapture title="Cables / equipment condition" label="Cable Photo" stage={stage} category="cables" acceptedEvidence={accepted("cables")} onReplacementSelected={beginReplacement} onAccept={accept} />
@@ -267,7 +267,7 @@ function HolderPicker({ destination, setDestination }) { return <div className="
 
 function EvidenceSummary({ evidence = [], stage, compact = false }) {
   const stages = stage ? [stage] : ["start", "end"];
-  return <div className={compact ? "evidence-summary compact" : "evidence-summary"}>{stages.map((currentStage) => <div key={currentStage}><span>{currentStage === "start" ? "Start" : "End"}</span>{["room", "cables"].map((category) => { const item = evidence.find((entry) => entry.stage === currentStage && entry.category === category && entry.accepted); return <small key={category} className={item ? "has-evidence" : "missing-evidence"}>{item ? <Check size={14} /> : <X size={14} />}{category === "room" ? "Room" : "Cables"}{item?.availability === "UNAVAILABLE_AFTER_RELOAD" && " · preview unavailable"}</small>; })}</div>)}</div>;
+  return <div className={compact ? "evidence-summary compact" : "evidence-summary"}>{stages.map((currentStage) => <div key={currentStage}><span>{currentStage === "start" ? "Start" : "End"}</span>{["room", "cables"].map((category) => { const item = evidence.find((entry) => entry.stage === currentStage && entry.category === category && entry.accepted); const unavailable = item?.availability === "UNAVAILABLE_AFTER_RELOAD"; return <small key={category} className={item && !unavailable ? "has-evidence" : "missing-evidence"}>{unavailable ? <ImageOff size={14} /> : item ? <Check size={14} /> : <X size={14} />}{category === "room" ? "Room" : "Cables"}{unavailable && " · captured previously; preview unavailable"}</small>; })}</div>)}</div>;
 }
 function TransferPreview({ from, to }) { return <div className="transfer-preview"><strong>{from}</strong><ArrowDown size={20} /><strong>{to}</strong></div>; }
 function SuccessScreen({ flow, close }) { return <div className="success-screen"><div className="success-icon"><Check size={40} /></div><p className="eyebrow">RECORDED</p><h2>{flow.title}</h2><div className="success-room">{flow.roomName}</div><p>{flow.detail}</p><button className="primary-action" onClick={close}>Done</button></div>; }
