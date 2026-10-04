@@ -9,6 +9,14 @@ export const FLAG_TYPE = Object.freeze({
   KEY_CUSTODY_MISMATCH: "KEY_CUSTODY_MISMATCH",
 });
 
+export const RECOVERY_REASONS = Object.freeze({
+  PREVIOUS_BAND_LEFT: "Previous band had already left",
+  RECEIVED_KEY_FROM_PREVIOUS_USER: "Received key from the previous user",
+  RECEIVED_KEY_FROM_SW: "Received key from SW Office",
+  RECEIVED_KEY_FROM_MHO: "Received key from MHO",
+  OTHER: "Other",
+});
+
 const MEMBERS = new Set(["member-a", "member-b", "member-c", "member-d"]);
 const LOCATIONS = new Set(["sw", "mho"]);
 
@@ -97,6 +105,9 @@ export function friendlyError(code) {
     FLAG_NOT_FOUND: "This flag no longer exists.",
     FLAG_ALREADY_RESOLVED: "This flag has already been resolved.",
     REASON_REQUIRED: "Enter a short reason for the custody correction.",
+    RECOVERY_REASON_REQUIRED: "Choose a reason for closing the previous session.",
+    RECOVERY_REMARKS_REQUIRED: "Add remarks when choosing Other.",
+    RECOVERY_REMARKS_TOO_LONG: "Keep recovery remarks within 500 characters.",
   };
   return messages[code] ?? "This action could not be completed.";
 }
@@ -210,7 +221,7 @@ function mismatchFlag({ operationId, timestamp, roomId, previous, reportedSource
   };
 }
 
-function closeIncompleteParts(state, { room, session, actorId, reason, timestamp, operationId }) {
+function closeIncompleteParts(state, { room, session, actorId, reason, timestamp, operationId, recoveryReason = null, recoveryRemarks = "" }) {
   const endEvidence = Array.isArray(session.endDraftEvidence) ? session.endDraftEvidence : [];
   const closedSession = {
     ...session,
@@ -218,13 +229,14 @@ function closeIncompleteParts(state, { room, session, actorId, reason, timestamp
     closedAt: timestamp,
     endEvidence,
     endDraftEvidence: [],
-    closure: { outcome: SESSION_STATUS.INCOMPLETE, reason, actorId, timestamp, operationId, keyDisposition: null },
+    closure: { outcome: SESSION_STATUS.INCOMPLETE, reason, actorId, closedBy: actorId, recoveryReason, recoveryRemarks, timestamp, operationId, keyDisposition: null },
   };
   const flag = missingCheckoutFlag({ operationId, timestamp, roomId: room.id, session: closedSession, actorId, reason, evidence: { start: closedSession.startEvidence, end: closedSession.endEvidence } });
+  Object.assign(flag, { closedBy: actorId, recoveryReason, recoveryRemarks });
   return {
     session: closedSession,
     flag,
-    event: audit("SESSION_CLOSED", operationId, timestamp, actorId, { sessionId: session.id, roomId: room.id, outcome: SESSION_STATUS.INCOMPLETE, reason, evidenceSnapshot: flag.evidenceSnapshot, keyDisposition: null }),
+    event: audit("SESSION_CLOSED", operationId, timestamp, actorId, { sessionId: session.id, roomId: room.id, outcome: SESSION_STATUS.INCOMPLETE, reason, closedBy: actorId, recoveryReason, recoveryRemarks, evidenceSnapshot: flag.evidenceSnapshot, keyDisposition: null }),
   };
 }
 
@@ -320,6 +332,7 @@ export function selfReportMissedCheckout(state, command) {
 
 export function recordIncomingCustody(state, command) {
   const { roomId, actorId, reportedSource, operationId, timestamp = isoNow(), expectedRoomVersion } = command;
+  const { recoveryReason, recoveryRemarks = "" } = command;
   const duplicate = begin(state, operationId); if (duplicate) return duplicate;
   const derived = roomState(state, roomId);
   if (!derived.room) return failure("ROOM_NOT_FOUND", state);
@@ -328,6 +341,11 @@ export function recordIncomingCustody(state, command) {
   if (room.version !== expectedRoomVersion) return failure("INVALID_ROOM_STATE", state);
   if (!MEMBERS.has(actorId) || !reportedSource || !validHolder(reportedSource.type, reportedSource.id)) return failure("INVALID_DESTINATION", state);
   if (reportedSource.type === "member" && reportedSource.id === actorId) return failure("SELF_TRANSFER", state);
+  if (session && session.memberId !== actorId) {
+    if (!Object.hasOwn(RECOVERY_REASONS, recoveryReason)) return failure("RECOVERY_REASON_REQUIRED", state);
+    if (typeof recoveryRemarks !== "string" || (recoveryReason === "OTHER" && !recoveryRemarks.trim())) return failure("RECOVERY_REMARKS_REQUIRED", state);
+    if (recoveryRemarks.length > 500) return failure("RECOVERY_REMARKS_TOO_LONG", state);
+  }
   const previous = { type: room.keyHolderType, id: room.keyHolderId };
   const nextHolder = { type: "member", id: actorId };
   const mismatch = previous.type !== reportedSource.type || previous.id !== reportedSource.id;
@@ -336,7 +354,7 @@ export function recordIncomingCustody(state, command) {
   let auditEvents = state.auditEvents;
   let relatedSessionId = null;
   if (session && session.memberId !== actorId) {
-    const closed = closeIncompleteParts(state, { room, session, actorId, reason: "KEY_MOVED_DURING_ACTIVE_SESSION", timestamp, operationId });
+    const closed = closeIncompleteParts(state, { room, session, actorId, reason: "KEY_MOVED_DURING_ACTIVE_SESSION", recoveryReason, recoveryRemarks: recoveryRemarks.trim(), timestamp, operationId });
     sessions = state.sessions.map((item) => item.id === session.id ? closed.session : item);
     flags = append(flags, closed.flag);
     auditEvents = append(auditEvents, closed.event);
@@ -387,7 +405,7 @@ export function resolveFlag(state, command) {
   if (!flag) return failure("FLAG_NOT_FOUND", state);
   if (flag.status === "RESOLVED") return failure("FLAG_ALREADY_RESOLVED", state);
   const resolved = { ...flag, status: "RESOLVED", resolvedBy: actorId, resolvedAt: timestamp, resolutionNote: note.trim().slice(0, 160) };
-  const next = { ...state, flags: state.flags.map((item) => item.id === flagId ? resolved : item), auditEvents: append(state.auditEvents, audit("FLAG_RESOLVED", operationId, timestamp, actorId, { flagId, note: resolved.resolutionNote })) };
+  const next = { ...state, flags: state.flags.map((item) => item.id === flagId ? resolved : item), auditEvents: append(state.auditEvents, audit("FLAG_RESOLVED", operationId, timestamp, actorId, { flagId, roomId: flag.roomId, sessionId: flag.sessionId, note: resolved.resolutionNote })) };
   return success(next, operationId);
 }
 
@@ -412,7 +430,7 @@ export function correctCustody(state, command) {
   const incompatible = session && !(nextHolder.type === "member" && nextHolder.id === session.memberId);
   const sessionsToClose = structuralIssue ? activeForRoom : incompatible ? [session] : [];
   for (const activeSession of sessionsToClose) {
-    const closed = closeIncompleteParts(state, { room, session: activeSession, actorId, reason: "ADMIN_RECOVERY", timestamp, operationId });
+    const closed = closeIncompleteParts(state, { room, session: activeSession, actorId, reason: "ADMIN_RECOVERY", recoveryRemarks: reason.trim(), timestamp, operationId });
     sessions = sessions.map((item) => item.id === activeSession.id ? closed.session : item);
     flags = append(flags, closed.flag);
     auditEvents = append(auditEvents, closed.event);
@@ -436,13 +454,16 @@ export function serializeDemoState(state) {
   const copy = structuredClone(state);
   const strip = (evidence) => evidence.map((item) => item.previewUrl ? { ...item, previewUrl: null, availability: "UNAVAILABLE_AFTER_RELOAD" } : item);
   copy.sessions = copy.sessions.map((session) => ({ ...session, startEvidence: strip(session.startEvidence ?? []), endEvidence: strip(session.endEvidence ?? []), endDraftEvidence: strip(session.endDraftEvidence ?? []) }));
+  const stripSnapshot = (snapshot) => snapshot && Object.fromEntries(Object.entries(snapshot).map(([stage, evidence]) => [stage, strip(evidence)]));
+  copy.flags = copy.flags.map((flag) => flag.evidenceSnapshot ? { ...flag, evidenceSnapshot: stripSnapshot(flag.evidenceSnapshot) } : flag);
+  copy.auditEvents = copy.auditEvents.map((event) => event.details.evidenceSnapshot ? { ...event, details: { ...event.details, evidenceSnapshot: stripSnapshot(event.details.evidenceSnapshot) } } : event);
   return JSON.stringify(copy);
 }
 
 export function parseDemoState(raw) {
   try {
     const parsed = JSON.parse(raw);
-    return validateState(parsed).some((issue) => issue.code === "INVALID_SCHEMA") ? null : parsed;
+    return validateState(parsed).some((issue) => issue.code === "INVALID_SCHEMA") ? null : JSON.parse(serializeDemoState(parsed));
   } catch {
     return null;
   }

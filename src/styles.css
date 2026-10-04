@@ -135,6 +135,9 @@ h1 { margin: 0; font-size: 1.55rem; letter-spacing: -.04em; }
 .flag-card .mini-action { margin-top: 9px; }
 .reason-field { display: block; margin-top: 18px; }
 .reason-field span { display: block; color: var(--muted); font-size: .85rem; font-weight: 750; }
+.reason-field select, .reason-field textarea { width: 100%; margin: 10px 0 16px; padding: 12px; color: #f3f5ef; background: #101210; border: 1px solid #4c514a; border-radius: 11px; font: inherit; }
+.reason-field textarea { min-height: 100px; resize: vertical; }
+input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid white; outline-offset: 3px; }
 
 @media (max-width: 480px) {
   .admin-room-list article { grid-template-columns: minmax(0,1fr) auto; }

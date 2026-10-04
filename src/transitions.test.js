@@ -52,13 +52,30 @@ test("self-reported missed checkout is terminal and flagged", () => {
 test("incoming receipt closes another member's session and preserves source mismatch", () => {
   const started = startA(makeInitialData(), "mr-1", "start-receipt");
   const room = started.state.rooms.find((item) => item.id === "mr-1");
-  const result = recordIncomingCustody(started.state, { roomId: "mr-1", actorId: "member-b", reportedSource: { type: "member", id: "member-c" }, operationId: "incoming", expectedRoomVersion: room.version });
+  const result = recordIncomingCustody(started.state, { roomId: "mr-1", actorId: "member-b", reportedSource: { type: "member", id: "member-c" }, recoveryReason: "PREVIOUS_BAND_LEFT", recoveryRemarks: "Room was empty when we arrived.", operationId: "incoming", expectedRoomVersion: room.version });
   assert.equal(result.ok, true);
   assert.equal(result.state.sessions.find((item) => item.id === room.activeSessionId).status, SESSION_STATUS.INCOMPLETE);
   assert.equal(result.state.rooms.find((item) => item.id === "mr-1").keyHolderId, "member-b");
   assert.equal(result.state.custodyEvents[0].previousRecordedHolder.id, "member-a");
   assert.equal(result.state.custodyEvents[0].reportedSource.id, "member-c");
   assert.equal(result.state.flags.filter((flag) => flag.type === "KEY_CUSTODY_MISMATCH").length, 1);
+  const closed = result.state.sessions.find((item) => item.id === room.activeSessionId);
+  assert.equal(closed.memberId, "member-a");
+  assert.equal(closed.closure.closedBy, "member-b");
+  assert.equal(closed.closure.recoveryReason, "PREVIOUS_BAND_LEFT");
+  assert.equal(closed.closure.recoveryRemarks, "Room was empty when we arrived.");
+  assert.deepEqual(closed.endEvidence, []);
+  assert.deepEqual(closed.startEvidence, started.state.sessions[0].startEvidence);
+  const mismatch = result.state.flags.find((flag) => flag.type === "KEY_CUSTODY_MISMATCH");
+  assert.equal(mismatch.previousRecordedHolder.id, "member-a");
+  assert.equal(mismatch.reportedSource.id, "member-c");
+  assert.equal(mismatch.receiverId, "member-b");
+  assert.equal(mismatch.reportingActorId, "member-b");
+  const closureAudit = result.state.auditEvents.find((event) => event.type === "SESSION_CLOSED");
+  assert.equal(closureAudit.details.recoveryRemarks, closed.closure.recoveryRemarks);
+  const restored = parseDemoState(serializeDemoState(result.state));
+  assert.equal(JSON.stringify(restored).includes("data:image"), false);
+  assert.equal(restored.flags.find((flag) => flag.type === "MISSING_END_CHECKOUT").evidenceSnapshot.start[0].availability, "UNAVAILABLE_AFTER_RELOAD");
 });
 
 test("duplicate operations and invalid outgoing transfers are rejected", () => {
@@ -120,7 +137,7 @@ test("partial end evidence is preserved when receipt recovery closes a session",
   const partial = [evidence("end", "partial")[0]];
   const drafted = saveEndDraftEvidence(started.state, { roomId: room.id, sessionId: room.activeSessionId, actorId: "member-a", evidence: partial });
   assert.equal(drafted.ok, true);
-  const recovered = recordIncomingCustody(drafted.state, { roomId: room.id, actorId: "member-b", reportedSource: { type: "member", id: "member-a" }, operationId: "recover-partial", expectedRoomVersion: room.version });
+  const recovered = recordIncomingCustody(drafted.state, { roomId: room.id, actorId: "member-b", reportedSource: { type: "member", id: "member-a" }, recoveryReason: "RECEIVED_KEY_FROM_PREVIOUS_USER", operationId: "recover-partial", expectedRoomVersion: room.version });
   const closed = recovered.state.sessions.find((item) => item.id === room.activeSessionId);
   assert.equal(closed.status, SESSION_STATUS.INCOMPLETE);
   assert.equal(closed.endEvidence.length, 1);
@@ -179,4 +196,39 @@ test("duplicate start and incoming receipt commands are idempotent", () => {
   const duplicateReceipt = recordIncomingCustody(received.state, receiptCommand);
   assert.equal(duplicateReceipt.code, "DUPLICATE_OPERATION");
   assert.equal(duplicateReceipt.state.custodyEvents.filter((item) => item.operationId === "same-receipt").length, 1);
+});
+
+test("recovery requires a valid reason and OTHER requires nonblank remarks", () => {
+  const state = makeInitialData();
+  const command = { roomId: "mr-4", actorId: "member-b", reportedSource: { type: "member", id: "member-d" }, operationId: "recovery-validation", expectedRoomVersion: 0 };
+  for (const recoveryReason of [undefined, "UNKNOWN", "toString"]) {
+    const result = recordIncomingCustody(state, { ...command, recoveryReason });
+    assert.equal(result.code, "RECOVERY_REASON_REQUIRED");
+    assert.equal(result.state, state);
+  }
+  assert.equal(recordIncomingCustody(state, { ...command, recoveryReason: "OTHER", recoveryRemarks: "  " }).code, "RECOVERY_REMARKS_REQUIRED");
+  assert.equal(recordIncomingCustody(state, { ...command, recoveryReason: "OTHER", recoveryRemarks: "x".repeat(501) }).code, "RECOVERY_REMARKS_TOO_LONG");
+  const result = recordIncomingCustody(state, { ...command, recoveryReason: "OTHER", recoveryRemarks: " Key found at reception. " });
+  assert.equal(result.ok, true);
+  assert.equal(result.state.sessions.find((session) => session.id === "session-demo-active").closure.recoveryRemarks, "Key found at reception.");
+});
+
+test("correction and flag resolution append audit facts without rewriting custody or session history", () => {
+  const initial = makeInitialData();
+  const receipt = recordIncomingCustody(initial, { roomId: "mr-4", actorId: "member-b", reportedSource: { type: "member", id: "member-d" }, recoveryReason: "PREVIOUS_BAND_LEFT", operationId: "audit-receipt", expectedRoomVersion: 0 });
+  const previousEvents = structuredClone(receipt.state.custodyEvents);
+  const corrected = correctCustody(receipt.state, { roomId: "mr-4", destination: { type: "location", id: "sw" }, reason: "Verified physically", operationId: "audit-correct", expectedRoomVersion: 1 });
+  assert.deepEqual(corrected.state.custodyEvents.slice(1), previousEvents);
+  assert.equal(corrected.state.custodyEvents[0].previousRecordedHolder.id, "member-b");
+  assert.equal(corrected.state.custodyEvents[0].newHolder.id, "sw");
+  assert.equal(corrected.state.custodyEvents[0].actorId, "admin-demo");
+  const flag = corrected.state.flags[0];
+  const resolved = resolveFlag(corrected.state, { flagId: flag.id, note: "Reviewed with both members", operationId: "audit-resolve", timestamp: "2026-10-05T10:00:00.000Z" });
+  assert.deepEqual(resolved.state.sessions, corrected.state.sessions);
+  assert.deepEqual(resolved.state.custodyEvents, corrected.state.custodyEvents);
+  assert.equal(resolved.state.flags.length, corrected.state.flags.length);
+  assert.equal(resolved.state.flags[0].resolvedBy, "admin-demo");
+  assert.equal(resolved.state.flags[0].resolvedAt, "2026-10-05T10:00:00.000Z");
+  assert.equal(resolved.state.flags[0].resolutionNote, "Reviewed with both members");
+  assert.equal(resolved.state.auditEvents[0].details.roomId, "mr-4");
 });
