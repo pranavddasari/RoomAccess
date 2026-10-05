@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 const authId='11111111-1111-4111-8111-111111111111';
 const memberId='22222222-2222-4222-8222-222222222222';
 const profile={id:memberId,name:'Test Student',email:'student@vitstudent.ac.in',auth_user_id:authId,role:'MEMBER',status:'ACTIVE'};
-async function setup(page,{role='MEMBER',state='ACTIVE',email=profile.email,signedIn=true}={}) {
+async function setup(page,{role='MEMBER',state='ACTIVE',email=profile.email,signedIn=true,callbackSuffix=''}={}) {
  await page.addInitScript(()=> { window.adminFlashed=false; new MutationObserver(()=>{if(document.querySelector('.admin-view'))window.adminFlashed=true;}).observe(document,{subtree:true,childList:true}); });
  const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
  const records=[{...profile,role}, ...Array.from({length:199},(_,i)=>({id:`person-${i}`,name:`Person ${i}`,email:`person${i}@vitstudent.ac.in`,role:i%20===0?'ADMIN':'MEMBER',status:i%15===0?'DISABLED':'ACTIVE'}))];
@@ -22,7 +22,7 @@ async function setup(page,{role='MEMBER',state='ACTIVE',email=profile.email,sign
   else if(path.endsWith('/logout')) return route.fulfill({status:204});
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)});
  });
- await page.goto('/');
+ await page.goto('/' + callbackSuffix);
  return {errors,requests};
 }
 async function noOverflow(page){expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);}
@@ -58,4 +58,14 @@ test('Admin members layout works at 390px with 200 people; adds both roles and c
  expect(requests.findLast(r=>r.path.endsWith('/add_club_member')).body).toEqual({p_name:'Arjun',p_email:`arjun-${role.toLowerCase()}@vitstudent.ac.in`,p_role:role});
  }
  await page.getByLabel('Search name or email').fill('person1@');const card=page.locator('.admin-card').filter({hasText:'person1@vitstudent.ac.in'});await card.getByRole('button',{name:'Make Admin'}).click();await expect(page.getByRole('dialog')).toContainText('Administrators can view all room/session records and photos');await page.getByRole('dialog').getByRole('button',{name:'Confirm'}).click();await expect(card).toContainText('ADMIN');expect(errors).toEqual([]);
+});
+
+for (const separator of ['#', '?']) test(`OAuth ${separator} callback shows one clean domain rejection message`, async ({ page }) => {
+ const message = 'This website is available only to approved Music Club members using a @vitstudent.ac.in Google account.';
+ const callbackSuffix = separator + new URLSearchParams({ error: 'access_denied', error_description: message.replace('@', '%40') });
+ const { errors } = await setup(page, { signedIn: false, callbackSuffix });
+ await expect(page.getByRole('alert')).toHaveText(message);
+ await expect(page.getByRole('alert')).toHaveCount(1);
+ await expect(page.getByRole('button', { name: 'Sign Out / Try Another Account', exact: true })).toBeVisible();
+ expect(errors).toEqual([]);
 });
