@@ -61,3 +61,20 @@ test('Edge handler denies JWT-only calls, requires explicit dry run, and never i
  assert.equal((await handler(request({'x-retention-secret':'fixture-server-only-secret'},'{}'))).status,400);assert.equal(initialized,0);
  const valid=await handler(request({'x-retention-secret':'fixture-server-only-secret'}));assert.equal(valid.status,200);assert.equal(initialized,1);assert.equal((await valid.json()).dryRun,true);
 });
+
+test('claimed orphan cannot become accepted evidence, and a recently uploaded orphan waits 24 hours',async()=>{
+ const {command,photo,holder}=await import('../tests/helpers/database.js');
+ const room=(await db.query("select id from rooms where display_name='MR-2'")).rows[0].id;
+ await command(db,admin,'CORRECT',room,{payload:{destination:holder(a),reason:'Verified fixture'}});
+ const sid=crypto.randomUUID(),orphan=await photo(db,a,sid,'START','ROOM');
+ await db.query("update photo_uploads set created_at=now()-interval '25 hours',expires_at=now()-interval '1 hour' where id=$1",[orphan.id]);
+ let plan=(await db.query('select public.retention_plan(false) as p')).rows[0].p;
+ const path=(await db.query('select storage_path from photo_uploads where id=$1',[orphan.id])).rows[0].storage_path;
+ assert.ok(!plan.paths.some(p=>p.storage_path===path));
+ await db.query("update storage.objects set created_at=now()-interval '25 hours' where name=$1",[path]);
+ plan=(await db.query('select public.retention_plan(false) as p')).rows[0].p;assert.ok(plan.paths.some(p=>p.storage_path===path));
+ await db.query("update photo_uploads set expires_at=now()+interval '24 hours' where id=$1",[orphan.id]);
+ const cablesPhoto=await photo(db,a,sid,'START','CABLES');
+ await assert.rejects(command(db,a,'START',room,{session:sid,payload:{roomPhoto:orphan,cablesPhoto}}),/Invalid or expired photo draft/);
+ assert.equal((await db.query('select * from sessions where id=$1',[sid])).rows.length,0);
+});

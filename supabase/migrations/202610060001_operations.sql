@@ -291,6 +291,16 @@ create function private.can_read_photo(p_path text) returns boolean language sql
 $$;
 create policy session_photo_upload on storage.objects for insert to authenticated with check(bucket_id='session-photos' and private.can_upload_photo(name) and owner_id=auth.uid()::text);
 create policy session_photo_read on storage.objects for select to authenticated using(bucket_id='session-photos' and private.can_read_photo(name));
+-- Restrictive guards prevent unrelated broad permissive Storage policies from
+-- granting access to this private bucket. Other buckets keep their own policies.
+create policy session_photo_upload_guard on storage.objects as restrictive for insert to authenticated
+ with check(bucket_id<>'session-photos' or (private.can_upload_photo(name) and owner_id=auth.uid()::text));
+create policy session_photo_read_guard on storage.objects as restrictive for select to authenticated
+ using(bucket_id<>'session-photos' or private.can_read_photo(name));
+create policy session_photo_anon_read_guard on storage.objects as restrictive for select to anon using(bucket_id<>'session-photos');
+create policy session_photo_anon_upload_guard on storage.objects as restrictive for insert to anon with check(bucket_id<>'session-photos');
+create policy session_photo_no_update on storage.objects as restrictive for update to anon,authenticated using(bucket_id<>'session-photos') with check(bucket_id<>'session-photos');
+create policy session_photo_no_delete on storage.objects as restrictive for delete to anon,authenticated using(bucket_id<>'session-photos');
 revoke all on function private.active_member(),private.check_disable_custody(),private.freeze_terminal_session(),private.freeze_evidence(),private.holder(text,uuid),private.valid_holder(jsonb,uuid,boolean),private.attach_photo(uuid,uuid,text,text,uuid,jsonb),private.can_upload_photo(text),private.can_read_photo(text) from public,anon,authenticated;
 grant execute on function private.active_member(),private.can_upload_photo(text),private.can_read_photo(text) to authenticated;
 revoke all on function public.operational_directory(),public.operational_snapshot(),public.register_photo_upload(uuid,uuid,text,text),public.operational_command(uuid,text,uuid,bigint,uuid,jsonb) from public,anon,authenticated;

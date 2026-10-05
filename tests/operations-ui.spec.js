@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-import {makeDatabase,as,identities} from './helpers/database.js';
+import {makeDatabase,as,identities,command,holder} from './helpers/database.js';
 let db,rooms,queue,files,uploads,errors;
 test.beforeEach(async()=>{db=await makeDatabase();rooms=(await db.query('select id from rooms order by display_name')).rows.map(r=>r.id);queue=Promise.resolve();files=new Map();uploads=[];errors=[];});
 test.afterEach(async()=>{await queue;await db.close();});
@@ -63,7 +63,7 @@ test('Admin initializes shared custody; Member photos compress, start/end retain
  const context=await browser.newContext({viewport:{width:390,height:844}}),student=await context.newPage();await connect(student,identities.a);const file=await imageFile(student);
  expect(file.buffer.length).toBeGreaterThan(512000);
  await roomCard(student).getByRole('button',{name:'Start Session',exact:true}).click();await photo(student,file);await photo(student,file,'cables');await student.getByRole('button',{name:'Start MR-1 Session'}).click();await expect(roomCard(student).getByRole('button',{name:'End Session'})).toBeVisible();
- expect(uploads.length).toBe(2);for(const u of uploads){expect(u.bytes).toBeLessThanOrEqual(512000);expect(u.mime).toBe('image/jpeg');}
+ expect(await student.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await student.screenshot({path:'/tmp/music-room-shared-session-390.png'});expect(uploads.length).toBe(2);for(const u of uploads){expect(u.bytes).toBeLessThanOrEqual(512000);expect(u.mime).toBe('image/jpeg');}
  await student.reload();await expect(roomCard(student).getByRole('button',{name:'End Session'})).toBeVisible();
  await roomCard(student).getByRole('button',{name:'End Session'}).click();await photo(student,file);await photo(student,file,'cables');await student.getByRole('button',{name:'Continue to Key Disposition'}).click();await student.getByRole('button',{name:'Keep Key With Me'}).click();await student.getByRole('button',{name:'Confirm & Complete Session'}).click();await student.getByRole('button',{name:'Done'}).click();
  await expect(roomCard(student).getByRole('button',{name:'Start Session',exact:true})).toBeVisible();
@@ -87,4 +87,13 @@ test('Compression rejects invalid images and constrains dimensions/bytes without
  await connect(page,identities.a);const file=await imageFile(page);
  const result=await page.evaluate(async encoded=>{const {compressPhoto}=await import('/src/data/photos.js');const input=await(await fetch('data:image/png;base64,'+encoded)).blob();const result=await compressPhoto(new File([input],'camera.png',{type:'image/png'}));let invalid='';try{await compressPhoto(new File(['bad image'],'invalid.jpg',{type:'image/jpeg'}));}catch(e){invalid=e.message;}return {bytes:result.blob.size,width:result.width,height:result.height,mime:result.blob.type,invalid};},file.buffer.toString('base64'));
  expect(result.bytes).toBeLessThanOrEqual(512000);expect(Math.max(result.width,result.height)).toBeLessThanOrEqual(1600);expect(result.mime).toBe('image/jpeg');expect(result.invalid).toContain('could not be decoded');expect(uploads.length).toBe(0);
+});
+
+test('Failed photo upload leaves the requirement incomplete and retains the preview for retry',async({page})=>{
+ test.setTimeout(45000);await command(db,identities.admin,'CORRECT',rooms[0],{payload:{destination:holder(identities.a),reason:'Verified fixture custody'}});
+ await connect(page,identities.a);const file=await imageFile(page);await roomCard(page).getByRole('button',{name:'Start Session',exact:true}).click();
+ const capture=page.locator('.photo-capture').first();await capture.locator('input[type=file]').setInputFiles(file);
+ await page.route('https://membership.test/storage/v1/object/session-photos/**',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Temporary upload failure',message:'Temporary upload failure',statusCode:'503'})}),{times:1});
+ await capture.getByRole('button',{name:'Use Photo'}).click();await expect(capture.locator('.field-error')).toBeVisible();await expect(capture.locator('.ready-check')).toHaveCount(0);await expect(page.getByRole('button',{name:'Add both photos to continue'})).toBeDisabled();
+ await expect(capture.locator('img')).toBeVisible();await capture.getByRole('button',{name:'Use Photo'}).click();await expect(capture.locator('.ready-check')).toBeVisible();expect((await db.query('select * from sessions')).rows.length).toBe(0);
 });

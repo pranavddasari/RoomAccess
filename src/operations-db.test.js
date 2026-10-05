@@ -147,3 +147,19 @@ test('Storage denies other active member evidence and rejects foreign or oversiz
  await assert.rejects(command(db,a,'START',rooms[4],{session:sid,payload:{roomPhoto,cablesPhoto}}),/valid private uploaded photo/);
  assert.equal((await db.query('select * from sessions where id=$1',[sid])).rows.length,0);
 });
+
+test('invalid verified email and unknown membership cannot read snapshots or operate even with a claimed actor in payload',async()=>{
+ await assert.rejects(command(db,unknown,'RECEIVE',rooms[0],{payload:{source:sw,actorId:admin}}),/Active membership/);
+ await db.query("update auth.users set email='a@gmail.com' where id=$1",[a]);
+ assert.equal((await as(db,a,'select * from room_key_state')).rows.length,0);
+ await assert.rejects(command(db,a,'RECEIVE',rooms[0],{payload:{source:sw,actorId:admin}}),/Active membership/);
+ await db.query("update auth.users set email='a@vitstudent.ac.in' where id=$1",[a]);
+});
+
+test('restrictive Storage guards withstand broad pre-existing policies without exposing this bucket',async()=>{
+ await db.exec('create policy fixture_broad_storage on storage.objects for all to public using(true) with check(true); grant usage on schema storage to anon; grant select on storage.objects to anon;');
+ assert.equal((await as(db,b,'select * from storage.objects')).rows.length,0);
+ assert.equal((await as(db,null,'select * from storage.objects')).rows.length,0);
+ const id=crypto.randomUUID(),sid=crypto.randomUUID(),path=(await as(db,a,"select register_photo_upload($1,$2,'START','ROOM') as p",[id,sid])).rows[0].p;
+ await assert.rejects(as(db,b,"insert into storage.objects(bucket_id,name,owner_id,metadata) values('session-photos',$1,$2,'{}')",[path,b]),/row-level security/);
+});

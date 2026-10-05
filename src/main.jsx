@@ -32,11 +32,12 @@ export default function App({ member, directory, signOut, refresh }) {
   const isAdmin = canAdmin(member), currentUser = member.id;
   const [data,setData] = useState(null), [tab,setTab] = useState("rooms"), [flow,setFlow] = useState(null);
   const [notice,setNotice] = useState(null), [busy,setBusy] = useState(false);
+  const profileRole = useRef(member.role); profileRole.current=member.role;
   const mutation = useRef(false), request = useRef(0), mounted=useRef(true), previews=useRef(new Set());
   const reload = async () => {
-    const run=++request.current;
+    const run=++request.current, authorizedRole=profileRole.current;
     const loaded=await loadOperations();
-    if(mounted.current && run===request.current) {setData(loaded.data);setNames(loaded.names);}
+    if(mounted.current && run===request.current) {setData({...loaded.data,profileRole:authorizedRole});setNames(loaded.names);}
     return loaded.data;
   };
   useEffect(()=>{
@@ -45,6 +46,12 @@ export default function App({ member, directory, signOut, refresh }) {
     void load();const unsubscribe=subscribeOperations(load);
     return ()=>{mounted.current=false;++request.current;unsubscribe();for(const url of previews.current)URL.revokeObjectURL(url);};
   },[]);
+  useEffect(()=>{
+    if(!flow || flow.type==='success'){for(const url of previews.current)URL.revokeObjectURL(url);previews.current.clear();}
+  },[flow?.type]);
+  useEffect(()=>{
+    if(data && data.profileRole!==member.role)void reload().catch(e=>setNotice(e.message));
+  },[member.role]);
   const execute = async (action, roomId, options, success) => {
     if(mutation.current)return false;mutation.current=true;setBusy(true);setNotice(null);
     try {await runCommand(action,roomId,options);const latest=await reload();success?.(latest);return true;}
@@ -89,7 +96,7 @@ export default function App({ member, directory, signOut, refresh }) {
   };
   const saveEndEvidence=evidence=>setFlow(previous=>({...previous,evidence}));
   const close=()=>{if(!mutation.current)setFlow(null);};
-  if(!data)return <div className="app-shell"><p role="status">Loading shared room state…</p>{notice&&<p role="alert">{notice}</p>}<button className="secondary-action" onClick={()=>reload().then(()=>setNotice(null)).catch(e=>setNotice(e.message))}>Retry</button><button className="text-action" onClick={signOut}>Sign Out</button></div>;
+  if(!data || data.profileRole!==member.role)return <div className="app-shell"><p role="status">Loading shared room state…</p>{notice&&<p role="alert">{notice}</p>}<button className="secondary-action" onClick={()=>reload().then(()=>setNotice(null)).catch(e=>setNotice(e.message))}>Retry</button><button className="text-action" onClick={signOut}>Sign Out</button></div>;
   return <div className={`app-shell ${tab==='admin'?'app-shell--admin':''}`}>
     <header className="topbar"><div className="brand-mark"><Music2 size={20}/></div><div><p className="eyebrow">COLLEGE MUSIC CLUB</p><h1>Music Club Rooms</h1></div></header>
     <section className="account-area"><div><strong>{member.name}</strong><span>{member.email}</span><span>{isAdmin?'Admin':'Member'}</span></div><button className="text-action" disabled={busy} onClick={signOut}>Sign Out</button></section>

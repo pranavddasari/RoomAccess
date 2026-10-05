@@ -19,6 +19,7 @@ begin
  union
  select u.storage_path,'ABANDONED_UPLOAD'::text from public.photo_uploads u where u.expires_at<now() and u.deleted_at is null
  and not exists(select 1 from public.session_photos p where p.storage_path=u.storage_path)
+ and not exists(select 1 from storage.objects o where o.bucket_id='session-photos' and o.name=u.storage_path and o.created_at>=now()-interval '24 hours')
  union
  select q.storage_path,q.reason from public.photo_cleanup_queue q where q.deleted_at is null
  ) candidate where not exists(select 1 from public.photo_cleanup_queue q where q.storage_path=candidate.storage_path and q.deleted_at is not null)
