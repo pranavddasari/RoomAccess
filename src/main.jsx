@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { AlertTriangle, ArrowDown, ArrowLeft, Camera, Check, CheckCircle2, Clock3, History, ImageOff, KeyRound, Music2, RotateCcw, ShieldCheck, UserRound, Users, X } from "lucide-react";
 import {
   FLAG_TYPE, RECOVERY_REASONS, SESSION_STATUS, completeSession, correctCustody, friendlyError,
@@ -7,9 +6,7 @@ import {
   recordOutgoingCustody, resolveFlag, roomState, saveEndDraftEvidence,
   selfReportMissedCheckout, serializeDemoState, startSession, validateState,
 } from "./transitions.js";
-import "./styles.css";
 import AdminView from "./admin.jsx";
-import AuthGate from "./auth.jsx";
 import { canAdmin } from "./auth-model.js";
 import { setMemberDirectory } from "./admin-model.js";
 
@@ -19,6 +16,7 @@ const FIXTURES = [
   { id: "member-c", name: "Member C" }, { id: "member-d", name: "Member D" },
 ];
 let MEMBERS = FIXTURES;
+let ACTIVE_MEMBERS = [];
 const LOCATIONS = { sw: "SW Office", mho: "Men's Hostel Office (MHO)" };
 const memberName = (id) => MEMBERS.find((member) => member.id === id)?.name ?? id;
 const holderName = (holderOrType, id) => {
@@ -43,7 +41,8 @@ function loadDemo() {
     : { data: makeInitialData(), notice: "Saved demo state was invalid, so known demo data was restored safely." };
 }
 
-function App({ member, directory, signOut, refresh }) {
+export default function App({ member, directory, signOut, refresh }) {
+  ACTIVE_MEMBERS = directory;
   MEMBERS = [...FIXTURES, ...directory];
   setMemberDirectory(MEMBERS);
   const isAdmin = canAdmin(member);
@@ -269,7 +268,7 @@ function ReceiveFlow({ flow, room, session, currentUser, setFlow, confirm, busy,
 function RecoveryConsequence({ room, session }) { return <div className="consequence-card"><AlertTriangle size={22} /><p><strong>{room.name}</strong> still has an unfinished session from {memberName(session.memberId)}. Continuing will mark that session as incomplete. Missing checkout photos cannot be added later. This action will be recorded for admin review.</p></div>; }
 
 function SourcePicker({ currentUser, source, onSelect }) { return <div className="choice-stack"><button className={source?.type === "member" ? "choice-card selected" : "choice-card"} onClick={() => onSelect({ type: "member", id: null })}><Users size={22} /><span><strong>Club Member</strong></span></button><button className={source?.type === "location" && source.id === "sw" ? "choice-card selected" : "choice-card"} onClick={() => onSelect({ type: "location", id: "sw" })}><KeyRound size={22} /><span><strong>SW Office</strong></span></button><button className={source?.type === "location" && source.id === "mho" ? "choice-card selected" : "choice-card"} onClick={() => onSelect({ type: "location", id: "mho" })}><KeyRound size={22} /><span><strong>Men's Hostel Office</strong></span></button>{source?.type === "member" && <MemberPicker excludedId={currentUser} selected={source.id} onSelect={(id) => onSelect({ type: "member", id })} />}</div>; }
-function MemberPicker({ excludedId, selected, onSelect }) { return <div className="member-picker"><span>Select a member</span><div className="member-grid">{MEMBERS.filter((member) => member.id !== excludedId).map((member) => <button key={member.id} className={selected === member.id ? "selected" : ""} onClick={() => onSelect(member.id)}><UserRound size={18} /> {member.name}</button>)}</div></div>; }
+function MemberPicker({ excludedId, selected, onSelect }) { return <div className="member-picker"><span>Select a member</span><div className="member-grid">{ACTIVE_MEMBERS.filter((member) => member.id !== excludedId).map((member) => <button key={member.id} className={selected === member.id ? "selected" : ""} onClick={() => onSelect(member.id)}><UserRound size={18} /> {member.name}</button>)}</div></div>; }
 
 function AdminCorrectionFlow({ room, data, close, onConfirm, busy }) {
   const [destination, setDestination] = useState(null); const [reason, setReason] = useState("");
@@ -297,10 +296,3 @@ function CustodyCard({ event, data }) {
 function HistoryView({ data }) { return <div className="content-view"><div className="page-heading"><p className="eyebrow">ACTIVITY LOG</p><h2>History</h2></div><section className="history-section"><h3>Key / Custody History</h3>{data.custodyEvents.length ? data.custodyEvents.map((event) => <CustodyCard key={event.id} event={event} data={data} />) : <EmptyState icon={KeyRound} text="No custody events recorded yet." />}</section><section className="history-section"><h3>Session History</h3>{data.sessions.map((session) => <SessionCard key={session.id} session={session} data={data} />)}</section></div>; }
 
 function EmptyState({ icon: Icon, text }) { return <div className="empty-state"><Icon size={22} /><span>{text}</span></div>; }
-
-const root = createRoot(document.getElementById("root"));
-root.render(<AuthGate>{props => <App key={props.member.auth_user_id} {...props} />}</AuthGate>);
-
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => root.unmount());
-}

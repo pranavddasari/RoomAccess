@@ -26,7 +26,7 @@ export default function AuthGate({ children }) {
   const callbackError = new URLSearchParams(location.hash.slice(1)).get('error_description') || new URLSearchParams(location.search).get('error_description');
   if (callbackError) { history.replaceState(null, '', location.pathname); setAuth({ state: 'DOMAIN_DENIED', error: `${denialMessages.DOMAIN_DENIED} ${callbackError}` }); } else void refresh();
   // Defer Supabase calls outside onAuthStateChange to avoid its session lock.
-  const { data: { subscription } } = supabase.auth.onAuthStateChange(() => { setTimeout(refresh, 0); });
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => { if (event === 'INITIAL_SESSION' && callbackError) return; setTimeout(refresh, 0); });
   const timer = setInterval(refresh, 60000);
   const focus = () => void refresh(); window.addEventListener('focus', focus);
   return () => { ++generation.current; subscription.unsubscribe(); clearInterval(timer); window.removeEventListener('focus', focus); };
