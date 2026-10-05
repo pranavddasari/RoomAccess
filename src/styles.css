@@ -144,3 +144,55 @@ input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3p
   .admin-room-list article .mini-action { grid-column: 1 / -1; }
   .custody-log { grid-template-columns: 1fr; }
 }
+
+/* Operational admin: compact state, readable records, and room drilldowns. */
+.admin-segments { display: flex; gap: 4px; padding: 5px; margin-bottom: 20px; background: #181b17; border: 1px solid var(--line); border-radius: 14px; }
+.admin-segments button { flex: 1; min-width: 0; min-height: 46px; padding: 8px; color: var(--muted); background: transparent; border: 0; border-radius: 9px; font-weight: 750; }
+.admin-segments button[aria-pressed="true"] { background: var(--acid); color: var(--ink); }
+.admin-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin: 0 0 28px; }
+.admin-summary > div { display: flex; flex-direction: column; gap: 5px; padding: 16px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 15px; }
+.admin-summary strong { font-size: 1.7rem; }
+.admin-summary span { color: var(--muted); font-size: .8rem; }
+.admin-grid { display: grid; gap: 14px; align-items: start; }
+.admin-card { min-width: 0; padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; overflow-wrap: anywhere; }
+.admin-card p { line-height: 1.5; }
+.admin-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.admin-card-heading h4 { margin: 4px 0; font-size: 1rem; }
+.admin-time { color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.admin-facts { display: grid; gap: 12px; margin: 16px 0; }
+.admin-facts > div { min-width: 0; }
+.admin-facts dt { margin-bottom: 3px; color: var(--muted); font-size: .78rem; }
+.admin-facts dd { margin: 0; font-size: .93rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-evidence { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+.admin-evidence > div { min-width: 0; }
+.admin-evidence span { display: flex; align-items: center; gap: 4px; font-size: .8rem; font-weight: 700; }
+.admin-evidence small { display: block; margin: 4px 0 0 20px; color: var(--muted); font-size: .75rem; }
+.evidence-captured { color: var(--acid); } .evidence-missing { color: #ffc292; }
+.admin-details { border-top: 1px solid var(--line); margin-top: 12px; }
+.admin-details > summary, .photo-inspection > summary { cursor: pointer; min-height: 44px; padding: 13px 0; color: var(--acid); font-size: .88rem; font-weight: 750; }
+.admin-evidence.inspection { grid-template-columns: 1fr; }
+.admin-evidence.inspection > div { padding: 8px 0; }
+.photo-inspection img { display: block; max-width: 100%; max-height: 65vh; margin: 8px auto; object-fit: contain; border-radius: 8px; background: #0c0d0c; }
+.preview-unavailable { color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.admin-flag.open { border-color: #825539; }
+.status--open { background: #402819; color: #ffbd8c; } .status--resolved { background: #29301a; color: var(--acid); }
+.admin-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin: 16px 0 20px; }
+.admin-filters label { flex: 1 1 120px; min-width: 0; }
+.admin-filters span { display: block; margin-bottom: 7px; color: var(--muted); font-size: .82rem; }
+.admin-filters select { width: 100%; min-height: 46px; padding: 10px; color: #f3f5ef; background: var(--panel); border: 1px solid #4c514a; border-radius: 10px; }
+.admin-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.admin-actions button { flex: 1 1 120px; }
+.admin-actions .secondary-action { margin-top: 0; }
+.room-detail-dialog { width: min(720px,calc(100% - 20px)); max-height: 90dvh; padding: 24px 18px; color: #f4f6ef; background: #111311; border: 1px solid #4c514a; border-radius: 22px; overflow-y: auto; }
+.room-detail-dialog::backdrop { background: rgb(0 0 0 / .75); backdrop-filter: blur(5px); }
+.room-detail-dialog > h2 { margin-top: 4px; }
+.room-detail-dialog > .admin-section { margin-top: 26px; }
+.room-detail-dialog .admin-card + .admin-card { margin-top: 12px; }
+.room-detail-dialog .flow-close { top: 14px; right: 14px; }
+.demo-tools { margin-top: 30px; }
+@media (min-width: 760px) {
+  .app-shell--admin { width: min(100%,1160px); }
+  .admin-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .admin-summary > div { padding: 18px 22px; }
+  .admin-facts { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}

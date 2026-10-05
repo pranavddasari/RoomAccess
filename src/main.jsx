@@ -8,6 +8,7 @@ import {
   selfReportMissedCheckout, serializeDemoState, startSession, validateState,
 } from "./transitions.js";
 import "./styles.css";
+import AdminView from "./admin.jsx";
 
 const STORAGE_KEY = "music-club-rooms-demo-v2";
 const MEMBERS = [
@@ -119,7 +120,7 @@ function App() {
 
   useWebMcp({ data, currentUser, changeUser, resetDemo });
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${tab === "admin" ? "app-shell--admin" : ""}`}>
     <header className="topbar"><div className="brand-mark"><Music2 size={20} /></div><div><p className="eyebrow">COLLEGE MUSIC CLUB</p><h1>Music Club Rooms</h1></div></header>
     {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice(null)} aria-label="Dismiss message"><X size={16} /></button></div>}
     <main>
@@ -286,19 +287,6 @@ function CustodyCard({ event, data }) {
 }
 function HistoryView({ data }) { return <div className="content-view"><div className="page-heading"><p className="eyebrow">ACTIVITY LOG</p><h2>History</h2></div><section className="history-section"><h3>Key / Custody History</h3>{data.custodyEvents.length ? data.custodyEvents.map((event) => <CustodyCard key={event.id} event={event} data={data} />) : <EmptyState icon={KeyRound} text="No custody events recorded yet." />}</section><section className="history-section"><h3>Session History</h3>{data.sessions.map((session) => <SessionCard key={session.id} session={session} data={data} />)}</section></div>; }
 
-function AdminView({ data, issues, resetDemo, resolveFlag: resolve, openCorrection }) {
-  const [notes, setNotes] = useState({}); const active = data.sessions.filter((session) => session.status === SESSION_STATUS.ACTIVE); const incomplete = data.sessions.filter((session) => session.status === SESSION_STATUS.INCOMPLETE);
-  return <div className="content-view"><div className="page-heading"><p className="eyebrow">PROTOTYPE VIEW</p><h2>Admin Demo</h2></div>
-    {issues.length > 0 && <section className="admin-section"><h3>State Issues</h3>{issues.map((issue, index) => <div className="warning-card" key={`${issue.code}-${index}`}><AlertTriangle size={22} /><p>{issue.message}</p></div>)}</section>}
-    <section className="admin-section"><h3>Room Status</h3><div className="admin-room-list">{data.rooms.map((room) => { const derived = roomState(data, room.id); return <article key={room.id}><div><strong>{room.name}</strong><span>{derived.kind === "INVALID" ? "State issue" : derived.session ? `Active — ${memberName(derived.session.memberId)}` : "Idle"}</span></div><p><KeyRound size={15} /> {holderName(room.keyHolderType, room.keyHolderId)}</p><button className="mini-action" onClick={() => openCorrection(room)}>Correct</button></article>; })}</div></section>
-    <section className="admin-section"><h3>Active Sessions</h3>{active.length ? active.map((session) => <SessionCard key={session.id} session={session} data={data} />) : <EmptyState icon={CheckCircle2} text="No active sessions." />}</section>
-    <section className="admin-section"><h3>Incomplete Sessions</h3>{incomplete.length ? incomplete.map((session) => <SessionCard key={session.id} session={session} data={data} />) : <EmptyState icon={CheckCircle2} text="No incomplete sessions." />}</section>
-    <section className="admin-section"><h3>Flags</h3>{data.flags.length ? data.flags.map((flag) => <article className={`flag-card ${flag.status === "RESOLVED" ? "resolved" : ""}`} key={flag.id}><AlertTriangle size={22} /><div><strong>{flag.type === FLAG_TYPE.MISSING_END_CHECKOUT ? "Missing end checkout" : "Key custody mismatch"}</strong><p>{data.rooms.find((room) => room.id === flag.roomId)?.name} · {flag.status}</p>{flag.type === FLAG_TYPE.MISSING_END_CHECKOUT ? <><small>Member: {memberName(flag.subjectMemberId)}</small><small>Reason: {reasonLabel(flag.reason)}</small><small>Recovery by: {memberName(flag.triggeredBy)}</small><EvidenceSummary evidence={[...(flag.evidenceSnapshot?.start ?? []), ...(flag.evidenceSnapshot?.end ?? [])]} /></> : <><small>Previous record: {holderName(flag.previousRecordedHolder)}</small><small>Reported: {holderName(flag.reportedSource)} → {memberName(flag.receiverId)}</small><small>Reporting actor: {memberName(flag.reportingActorId)}</small></>}{flag.status === "OPEN" ? <><input className="resolution-note" value={notes[flag.id] ?? ""} maxLength={160} onChange={(event) => setNotes((previous) => ({ ...previous, [flag.id]: event.target.value }))} placeholder="Optional resolution note" /><button className="mini-action" onClick={() => resolve(flag.id, notes[flag.id] ?? "")}>Resolve Flag</button></> : <small>Resolved {friendlyTime(flag.resolvedAt)}{flag.resolutionNote ? ` · ${flag.resolutionNote}` : ""}</small>}</div></article>) : <EmptyState icon={ShieldCheck} text="No flags recorded." />}</section>
-    <section className="admin-section"><h3>Session History</h3>{data.sessions.map((session) => <SessionCard key={`admin-${session.id}`} session={session} data={data} />)}</section>
-    <section className="admin-section"><h3>Key / Custody History</h3>{data.custodyEvents.length ? data.custodyEvents.map((event) => <CustodyCard key={`admin-${event.id}`} event={event} data={data} />) : <EmptyState icon={KeyRound} text="No custody events recorded yet." />}</section>
-    <button className="reset-button" onClick={resetDemo}><RotateCcw size={18} /> Demo only · Reset Demo Data</button>
-  </div>;
-}
 function EmptyState({ icon: Icon, text }) { return <div className="empty-state"><Icon size={22} /><span>{text}</span></div>; }
 
 function useWebMcp({ data, currentUser, changeUser, resetDemo }) {
