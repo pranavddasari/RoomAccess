@@ -245,6 +245,7 @@ begin
  insert into public.room_key_state(room_id,holder_type,holder_member_id,updated_by,version) values(r.id,case when destination->>'type'='member' then 'MEMBER' else upper(destination->>'id') end,case when destination->>'type'='member' then (destination->>'id')::uuid else null end,a,r.version+1)
  on conflict(room_id) do update set holder_type=excluded.holder_type,holder_member_id=excluded.holder_member_id,updated_at=now(),updated_by=a,version=excluded.version;
  else update public.room_key_state set version=r.version+1,updated_at=now(),updated_by=a where room_id=r.id; end if;
+ else update public.rooms set updated_at=now() where id=r.id;
  end if;
  result=jsonb_build_object('ok',true,'sessionId',coalesce(p_session_id,s.id),'version',r.version+case when p_action='RESOLVE_FLAG' then 0 else 1 end);
  insert into public.processed_operations(operation_id,actor_id,request,session_id,result) values(p_operation_id,a,req,coalesce(p_session_id,s.id),result);

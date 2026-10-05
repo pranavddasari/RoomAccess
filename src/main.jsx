@@ -1,28 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowLeft, Camera, Check, CheckCircle2, Clock3, History, ImageOff, KeyRound, Music2, RotateCcw, ShieldCheck, UserRound, Users, X } from "lucide-react";
-import {
-  FLAG_TYPE, RECOVERY_REASONS, SESSION_STATUS, completeSession, correctCustody, friendlyError,
-  makeInitialData, makeOperationId, parseDemoState, recordIncomingCustody,
-  recordOutgoingCustody, resolveFlag, roomState, saveEndDraftEvidence,
-  selfReportMissedCheckout, serializeDemoState, startSession, validateState,
-} from "./transitions.js";
+import { FLAG_TYPE, RECOVERY_REASONS, SESSION_STATUS } from "./transitions.js";
 import AdminView from "./admin.jsx";
 import { canAdmin } from "./auth-model.js";
 import { setMemberDirectory } from "./admin-model.js";
-
-const STORAGE_KEY = "music-club-rooms-demo-v2";
-const FIXTURES = [
-  { id: "member-a", name: "Member A" }, { id: "member-b", name: "Member B" },
-  { id: "member-c", name: "Member C" }, { id: "member-d", name: "Member D" },
-];
-let MEMBERS = FIXTURES;
+import { loadOperations, runCommand, operationId, sharedRoomState as roomState, subscribeOperations } from "./data/operations.js";
+import { uploadPhoto } from "./data/photos.js";
+import PrivatePhoto from "./private-photo.jsx";
+let MEMBERS = [];
 let ACTIVE_MEMBERS = [];
 const LOCATIONS = { sw: "SW Office", mho: "Men's Hostel Office (MHO)" };
 const memberName = (id) => MEMBERS.find((member) => member.id === id)?.name ?? id;
 const holderName = (holderOrType, id) => {
   const type = typeof holderOrType === "object" ? holderOrType?.type : holderOrType;
   const holderId = typeof holderOrType === "object" ? holderOrType?.id : id;
-  return type === "member" ? memberName(holderId) : LOCATIONS[holderId] ?? holderId;
+  return type === "member" ? memberName(holderId) : LOCATIONS[holderId] ?? "Key status not initialized";
 };
 const friendlyTime = (timestamp) => timestamp ? new Intl.DateTimeFormat([], { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp)) : "—";
 const reasonLabel = (reason) => ({
@@ -32,112 +24,81 @@ const reasonLabel = (reason) => ({
   ADMIN_RECOVERY: "Closed during admin custody correction",
 }[reason] ?? reason);
 
-function loadDemo() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return { data: makeInitialData(), notice: null };
-  const parsed = parseDemoState(raw);
-  return parsed
-    ? { data: parsed, notice: "Demo state restored. Temporary photo previews from the previous page load are marked unavailable." }
-    : { data: makeInitialData(), notice: "Saved demo state was invalid, so known demo data was restored safely." };
-}
-
 export default function App({ member, directory, signOut, refresh }) {
   ACTIVE_MEMBERS = directory;
-  MEMBERS = [...FIXTURES, ...directory];
-  setMemberDirectory(MEMBERS);
-  const isAdmin = canAdmin(member);
-  const [loaded] = useState(loadDemo);
-  const [data, setData] = useState(loaded.data);
-  const currentUser = member.id;
-  const [tab, setTab] = useState("rooms");
-  const [flow, setFlow] = useState(null);
-  const [notice, setNotice] = useState(loaded.notice);
-  const [busy, setBusy] = useState(false);
-  const issues = useMemo(() => validateState(data), [data]);
-
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, serializeDemoState(data)); }
-    catch { setNotice("Demo state is too large for browser storage. Current page data is still available until refresh."); }
-  }, [data]);
-
-  
-  const apply = (result, onSuccess) => {
-    if (!result.ok) { setNotice(result.error ?? friendlyError(result.code)); setBusy(false); return false; }
-    setData(result.state); setNotice(null); setBusy(false); onSuccess?.(result.state); return true;
+  const [names,setNames] = useState(directory);
+  MEMBERS = names;
+  setMemberDirectory(names);
+  const isAdmin = canAdmin(member), currentUser = member.id;
+  const [data,setData] = useState(null), [tab,setTab] = useState("rooms"), [flow,setFlow] = useState(null);
+  const [notice,setNotice] = useState(null), [busy,setBusy] = useState(false);
+  const mutation = useRef(false), request = useRef(0), mounted=useRef(true), previews=useRef(new Set());
+  const reload = async () => {
+    const run=++request.current;
+    const loaded=await loadOperations();
+    if(mounted.current && run===request.current) {setData(loaded.data);setNames(loaded.names);}
+    return loaded.data;
   };
-  const openFlow = (type, room, session = null) => { if (type === "admin-correct" && !isAdmin) return; setFlow({
-    type, roomId: room.id, sessionId: session?.id ?? null, actorId: currentUser,
-    roomVersion: room.version, operationId: makeOperationId(type), evidence: session?.endDraftEvidence ?? [], step: "choose",
-  }); };
-
-  const start = () => {
-    if (busy || flow?.actorId !== currentUser) return;
-    setBusy(true);
-    const result = startSession(data, { roomId: flow.roomId, actorId: flow.actorId, evidence: flow.evidence, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
-    apply(result, () => setFlow(null));
+  useEffect(()=>{
+    mounted.current=true;
+    const load=()=>reload().catch(e=>{if(mounted.current)setNotice(e.message || 'Could not refresh shared state. Try again.');});
+    void load();const unsubscribe=subscribeOperations(load);
+    return ()=>{mounted.current=false;++request.current;unsubscribe();for(const url of previews.current)URL.revokeObjectURL(url);};
+  },[]);
+  const execute = async (action, roomId, options, success) => {
+    if(mutation.current)return false;mutation.current=true;setBusy(true);setNotice(null);
+    try {await runCommand(action,roomId,options);const latest=await reload();success?.(latest);return true;}
+    catch(e){setNotice(e.message || 'Could not save. Retry after refreshing shared state.');try{await reload();}catch{/* Original error stays visible. */}return false;}
+    finally{mutation.current=false;setBusy(false);}
   };
-  const saveEndEvidence = (evidence) => {
-    const result = saveEndDraftEvidence(data, { roomId: flow.roomId, sessionId: flow.sessionId, actorId: flow.actorId, evidence });
-    if (result.ok) { setData(result.state); setFlow((previous) => ({ ...previous, evidence })); }
-    else setNotice(result.error);
+  const openFlow = (type,room,session=null) => {
+    if(type==='admin-correct' && !isAdmin)return;
+    setFlow({type,roomId:room.id,sessionId:session?.id??(type==='start'?operationId():null),actorId:currentUser,roomVersion:room.version,operationId:operationId(),evidence:session?.endDraftEvidence??[],step:'choose'});
   };
-  const finish = (disposition) => {
-    if (busy || flow?.actorId !== currentUser) return;
-    setBusy(true);
-    const result = completeSession(data, { roomId: flow.roomId, sessionId: flow.sessionId, actorId: flow.actorId, evidence: flow.evidence, disposition, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
-    const room = data.rooms.find((item) => item.id === flow.roomId);
-    apply(result, () => setFlow({ type: "success", title: "Session Complete", roomName: room.name, detail: disposition.type === "retain" ? `${memberName(currentUser)} retained the key.` : `${memberName(currentUser)} → ${holderName(disposition)}` }));
+  const options = (payload={}) => ({operation:flow.operationId,version:flow.roomVersion,session:flow.sessionId,payload});
+  const roomName = () => data.rooms.find(r=>r.id===flow.roomId)?.name;
+  const showSuccess=(title,detail)=>setFlow({type:'success',title,roomName:roomName(),detail});
+  const start=()=>execute('START',flow.roomId,options({roomPhoto:flow.evidence.find(p=>p.category==='room'),cablesPhoto:flow.evidence.find(p=>p.category==='cables')}),()=>setFlow(null));
+  const finish=destination=>execute('END',flow.roomId,options({destination}),()=>showSuccess('Session Complete',destination.type==='retain'?`${memberName(currentUser)} retained the key.`:`${memberName(currentUser)} → ${holderName(destination)}`));
+  const selfRecover=()=>execute('SELF_RECOVER',flow.roomId,options(),()=>showSuccess('Session Marked Incomplete',`Key remains with ${memberName(currentUser)}.`));
+  const transfer=destination=>execute('TRANSFER',flow.roomId,options({destination}),()=>showSuccess('Key Transfer Recorded',`${memberName(currentUser)} → ${holderName(destination)}`));
+  const receive=()=>{
+    const source=flow.reportedSource;if(!source?.id)return;
+    const room=data.rooms.find(r=>r.id===flow.roomId);
+    const mismatch=room.keyHolderType!==source.type || room.keyHolderId!==source.id;
+    if((mismatch || room.activeSessionId) && flow.step!=='confirm'){setFlow(previous=>({...previous,step:'confirm'}));return;}
+    return execute('RECEIVE',flow.roomId,options({source,recoveryReason:flow.recoveryReason,recoveryRemarks:flow.recoveryRemarks??''}),()=>showSuccess('Key Received',`Reported ${holderName(source)} → ${memberName(currentUser)}`));
   };
-  const selfRecover = () => {
-    if (busy || flow?.actorId !== currentUser) return;
-    setBusy(true);
-    const room = data.rooms.find((item) => item.id === flow.roomId);
-    const result = selfReportMissedCheckout(data, { roomId: flow.roomId, sessionId: flow.sessionId, actorId: flow.actorId, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
-    apply(result, () => setFlow({ type: "success", title: "Session Marked Incomplete", roomName: room.name, detail: `Key remains with ${memberName(currentUser)}.` }));
+  const resolveAdminFlag=(flagId,note)=>{
+    if(!isAdmin)return false;const flag=data.flags.find(f=>f.id===flagId);
+    return execute('RESOLVE_FLAG',flag.roomId,{operation:operationId(),version:null,payload:{flagId,note}});
   };
-  const transfer = (destination) => {
-    if (busy || flow?.actorId !== currentUser) return;
-    setBusy(true);
-    const room = data.rooms.find((item) => item.id === flow.roomId);
-    const result = recordOutgoingCustody(data, { roomId: flow.roomId, actorId: flow.actorId, destination, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
-    apply(result, () => setFlow({ type: "success", title: "Key Transfer Recorded", roomName: room.name, detail: `${memberName(currentUser)} → ${holderName(destination)}` }));
+  const correctAdminCustody=(destination,reason)=>isAdmin && execute('CORRECT',flow.roomId,options({destination,reason}),()=>showSuccess('Custody Corrected',`Current key holder: ${holderName(destination)}`));
+  const acceptPhoto=async candidate=>{
+    if(mutation.current)throw new Error('Another action is still being saved.');mutation.current=true;setBusy(true);
+    try {
+      const saved=await uploadPhoto(candidate.file,{id:operationId(),sessionId:flow.sessionId,stage:candidate.stage,category:candidate.category});
+      previews.current.add(saved.previewUrl);
+      if(candidate.stage==='end') {
+        const result=await runCommand('END_PHOTO',flow.roomId,{operation:operationId(),version:flow.roomVersion,session:flow.sessionId,payload:{...saved,category:saved.category.toUpperCase()}});
+        setFlow(previous=>({...previous,roomVersion:result.version}));await reload();
+      }
+      return saved;
+    }catch(e){try{await reload();}catch{}throw e;}
+    finally{mutation.current=false;setBusy(false);}
   };
-  const receive = () => {
-    if (busy || flow?.actorId !== currentUser) return;
-    const source = flow.reportedSource;
-    if (!source?.id) return;
-    const room = data.rooms.find((item) => item.id === flow.roomId);
-    const mismatch = room.keyHolderType !== source.type || room.keyHolderId !== source.id;
-    const recovery = data.sessions.find((item) => item.id === room.activeSessionId)?.memberId !== currentUser && room.activeSessionId;
-    if ((mismatch || recovery) && flow.step !== "confirm") { setFlow((previous) => ({ ...previous, step: "confirm" })); return; }
-    setBusy(true);
-    const result = recordIncomingCustody(data, { roomId: flow.roomId, actorId: flow.actorId, reportedSource: source, recoveryReason: flow.recoveryReason, recoveryRemarks: flow.recoveryRemarks, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
-    apply(result, () => setFlow({ type: "success", title: "Key Received", roomName: room.name, detail: `Reported ${holderName(source)} → ${memberName(currentUser)}` }));
-  };
-  const resolveAdminFlag = (flagId, note) => isAdmin && apply(resolveFlag(data, { flagId, note, actorId: currentUser, operationId: makeOperationId("resolve-flag") }));
-  const correctAdminCustody = (destination, reason) => {
-    if (busy || !isAdmin) return;
-    setBusy(true);
-    const room = data.rooms.find((item) => item.id === flow.roomId);
-    const result = correctCustody(data, { actorId: currentUser, roomId: room.id, destination, reason, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
-    apply(result, () => setFlow({ type: "success", title: "Custody Corrected", roomName: room.name, detail: `${holderName({ type: room.keyHolderType, id: room.keyHolderId })} → ${holderName(destination)}` }));
-  };
-  const resetDemo = () => { localStorage.removeItem(STORAGE_KEY); setData(makeInitialData()); setTab("rooms"); setFlow(null); setNotice("Demo data reset to the original fixtures."); setBusy(false); };
-
-
-
-  return <div className={`app-shell ${tab === "admin" ? "app-shell--admin" : ""}`}>
-    <header className="topbar"><div className="brand-mark"><Music2 size={20} /></div><div><p className="eyebrow">COLLEGE MUSIC CLUB</p><h1>Music Club Rooms</h1></div></header>
-    <section className="account-area"><div><strong>{member.name}</strong><span>{member.email}</span><span>{isAdmin ? "Admin" : "Member"}</span></div><button className="text-action" onClick={signOut}>Sign Out</button></section>
-    <p className="prototype-label">Room, key and photo records are stored only in this browser. Membership is shared through Supabase.</p>
-    {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice(null)} aria-label="Dismiss message"><X size={16} /></button></div>}
-    <main>
-      {tab === "rooms" && <RoomsView data={data} currentUser={currentUser} openFlow={openFlow} />}
-      {tab === "history" && <HistoryView data={data} />}
-      {tab === "admin" && (isAdmin ? <AdminView data={data} issues={issues} resetDemo={resetDemo} resolveFlag={resolveAdminFlag} openCorrection={(room) => openFlow("admin-correct", room)} member={member} refreshAuthorization={refresh} /> : <p role="alert">Administrator access required.</p>)}
-    </main>
-    <BottomNav isAdmin={isAdmin} tab={tab} setTab={(next) => { setTab(next); setFlow(null); }} activeCount={data.sessions.filter((session) => session.status === SESSION_STATUS.ACTIVE).length} />
-    {flow && (flow.type !== "admin-correct" || isAdmin) && <FlowPanel flow={flow} data={data} currentUser={currentUser} busy={busy} close={() => { setFlow(null); setBusy(false); }} setFlow={setFlow} start={start} saveEndEvidence={saveEndEvidence} finish={finish} selfRecover={selfRecover} transfer={transfer} receive={receive} correctCustody={correctAdminCustody} />}
+  const saveEndEvidence=evidence=>setFlow(previous=>({...previous,evidence}));
+  const close=()=>{if(!mutation.current)setFlow(null);};
+  if(!data)return <div className="app-shell"><p role="status">Loading shared room state…</p>{notice&&<p role="alert">{notice}</p>}<button className="secondary-action" onClick={()=>reload().then(()=>setNotice(null)).catch(e=>setNotice(e.message))}>Retry</button><button className="text-action" onClick={signOut}>Sign Out</button></div>;
+  return <div className={`app-shell ${tab==='admin'?'app-shell--admin':''}`}>
+    <header className="topbar"><div className="brand-mark"><Music2 size={20}/></div><div><p className="eyebrow">COLLEGE MUSIC CLUB</p><h1>Music Club Rooms</h1></div></header>
+    <section className="account-area"><div><strong>{member.name}</strong><span>{member.email}</span><span>{isAdmin?'Admin':'Member'}</span></div><button className="text-action" disabled={busy} onClick={signOut}>Sign Out</button></section>
+    {notice&&<div className="notice" role="alert">{notice}<button onClick={()=>setNotice(null)} aria-label="Dismiss message"><X size={16}/></button></div>}
+    <main>{tab==='rooms'&&<RoomsView data={data} currentUser={currentUser} openFlow={openFlow}/>}{tab==='history'&&<HistoryView data={data}/>}
+    {tab==='admin'&&(isAdmin?<AdminView data={data} issues={[]} resolveFlag={resolveAdminFlag} busy={busy} openCorrection={room=>openFlow('admin-correct',room,data.sessions.find(s=>s.id===room.activeSessionId))} member={member} refreshAuthorization={refresh}/>:<p role="alert">Administrator access required.</p>)}</main>
+    <BottomNav isAdmin={isAdmin} tab={tab} setTab={next=>{if(!busy){setTab(next);setFlow(null);}}} activeCount={data.sessions.filter(s=>s.status==='ACTIVE').length}/>
+    {flow&&(flow.type!=='admin-correct'||isAdmin)&&<FlowPanel flow={flow} data={data} currentUser={currentUser} busy={busy} close={close} setFlow={setFlow} start={start} saveEndEvidence={saveEndEvidence} onUpload={acceptPhoto} finish={finish} selfRecover={selfRecover} transfer={transfer} receive={receive} correctCustody={correctAdminCustody}/>}
+    {busy&&<p className="saving-indicator" role="status">Saving…</p>}
   </div>;
 }
 
@@ -152,9 +113,9 @@ function RoomsView({ data, currentUser, openFlow }) {
       const ownsSession = session?.memberId === currentUser;
       return <article className={`room-card ${session ? "is-active" : ""} ${derived.kind === "INVALID" ? "is-invalid" : ""}`} key={room.id}>
         <div className="room-card__header"><h3>{room.name}</h3><span className={`status ${derived.kind === "INVALID" ? "status--error" : session ? "status--active" : "status--idle"}`}>{derived.kind === "INVALID" ? "STATE ISSUE" : session ? "SESSION ACTIVE" : "IDLE"}</span></div>
-        {derived.kind === "INVALID" ? <p className="warning-text">{derived.issues[0]?.message}</p> : session ? <div className="session-summary"><strong>{memberName(session.memberId)}</strong><span>Started {friendlyTime(session.startedAt)}</span><EvidenceSummary evidence={session.startEvidence} compact /></div> : <p className="room-state">Ready for a session</p>}
+        {derived.kind === "INVALID" ? <p className="warning-text">{derived.issues[0]?.message}</p> : session ? <div className="session-summary"><strong>{memberName(session.memberId)}</strong><span>Started {friendlyTime(session.startedAt)}</span><EvidenceSummary evidence={session.startEvidence} compact /></div> : <p className="room-state">{derived.kind === "UNINITIALIZED" ? "Key custody needs initialization" : "Ready for a session"}</p>}
         <div className="key-row"><KeyRound size={18} /><span>Key</span><strong>{holderName(room.keyHolderType, room.keyHolderId)}</strong></div>
-        {derived.kind === "INVALID" ? <p className="helper">Ask a club administrator to correct this room’s current custody.</p> : session ? ownsSession ? <div className="card-actions"><button className="primary-action danger" onClick={() => openFlow("end", room, session)}>End Session</button><button className="recovery-action" onClick={() => openFlow("missed", room, session)}>I already left without checking out</button></div> : <div className="card-actions"><p className="occupied-note">This room has an unfinished session from {memberName(session.memberId)}.</p><button className="secondary-action" onClick={() => openFlow("receive", room, session)}>I Received This Key</button></div>
+        {derived.kind === "UNINITIALIZED" ? <p className="helper">Key status not initialized. An administrator must record physical custody first.</p> : derived.kind === "INVALID" ? <p className="helper">Ask a club administrator to correct this room’s current custody.</p> : session ? ownsSession ? <div className="card-actions"><button className="primary-action danger" onClick={() => openFlow("end", room, session)}>End Session</button><button className="recovery-action" onClick={() => openFlow("missed", room, session)}>I already left without checking out</button></div> : <div className="card-actions"><p className="occupied-note">This room has an unfinished session from {memberName(session.memberId)}.</p><button className="secondary-action" onClick={() => openFlow("receive", room, session)}>I Received This Key</button></div>
           : ownsKey ? <div className="card-actions"><button className="primary-action" onClick={() => openFlow("start", room)}>Start Session</button><button className="text-action" onClick={() => openFlow("transfer", room)}>Transfer Key</button></div>
           : <><p className="helper">You need to have the {room.name} key before starting a session.</p><button className="secondary-action" onClick={() => openFlow("receive", room)}>I Received This Key</button></>}
       </article>;
@@ -177,8 +138,8 @@ function FlowPanel(props) {
   if (flow.type === "success") return <Dialog label={flow.title}><SuccessScreen flow={flow} close={close} /></Dialog>;
   const heading = flow.type === "start" ? `START ${room?.name} SESSION` : flow.type === "end" ? `END ${room?.name} SESSION` : flow.type === "receive" ? `I RECEIVED THE ${room?.name} KEY` : flow.type === "transfer" ? `TRANSFER ${room?.name} KEY` : flow.type === "missed" ? "MISSED CHECKOUT" : `CORRECT ${room?.name} CUSTODY`;
   return <Dialog label={heading}><button className="flow-close" onClick={close} aria-label="Close"><X size={22} /></button><button className="back-link" onClick={close}><ArrowLeft size={18} /> Back</button><h2>{heading}</h2>
-    {flow.type === "start" && <PhotoFlow stage="start" roomName={room.name} evidence={flow.evidence} onChange={(evidence) => props.setFlow((previous) => ({ ...previous, evidence }))} onComplete={props.start} busy={props.busy} />}
-    {flow.type === "end" && <EndFlow flow={flow} room={room} evidence={flow.evidence} onEvidenceChange={props.saveEndEvidence} setFlow={props.setFlow} finish={props.finish} busy={props.busy} />}
+    {flow.type === "start" && <PhotoFlow onUpload={props.onUpload} stage="start" roomName={room.name} evidence={flow.evidence} onChange={(evidence) => props.setFlow((previous) => ({ ...previous, evidence }))} onComplete={props.start} busy={props.busy} />}
+    {flow.type === "end" && <EndFlow onUpload={props.onUpload} flow={flow} room={room} evidence={flow.evidence} onEvidenceChange={props.saveEndEvidence} setFlow={props.setFlow} finish={props.finish} busy={props.busy} />}
     {flow.type === "missed" && <MissedCheckoutFlow room={room} session={session} busy={props.busy} confirm={props.selfRecover} close={close} />}
     {flow.type === "transfer" && <DestinationPicker currentUser={flow.actorId} title="Who are you giving the key to?" confirmLabel="Confirm Key Transfer" onConfirm={props.transfer} busy={props.busy} />}
     {flow.type === "receive" && <ReceiveFlow flow={flow} room={room} session={session} currentUser={flow.actorId} setFlow={props.setFlow} confirm={props.receive} busy={props.busy} close={close} />}
@@ -188,19 +149,19 @@ function FlowPanel(props) {
 
 function Dialog({ label, children }) { return <div className="flow-backdrop" role="dialog" aria-modal="true" aria-label={label}><section className="flow-panel">{children}</section></div>; }
 
-function PhotoFlow({ stage, roomName, evidence, onChange, onComplete, continueLabel, busy }) {
+function PhotoFlow({ stage, roomName, evidence, onChange, onComplete, continueLabel, busy, onUpload }) {
   const accepted = (category) => evidence.find((item) => item.category === category && item.stage === stage && item.accepted);
-  const accept = (item) => onChange([...evidence.filter((existing) => !(existing.stage === stage && existing.category === item.category)), item]);
+  const accept = async (candidate) => { const item=await onUpload(candidate); onChange([...evidence.filter((existing) => !(existing.stage === stage && existing.category === item.category)), item]); };
   const beginReplacement = (category) => onChange(evidence.filter((existing) => !(existing.stage === stage && existing.category === category)));
-  const ready = [accepted("room"), accepted("cables")].every((item) => item?.availability === "AVAILABLE" && item.previewUrl);
+  const ready = [accepted("room"), accepted("cables")].every((item) => item?.accepted && (item.storagePath || item.previewUrl));
   return <div className="flow-content"><p className="flow-intro">{stage === "start" ? "Before using the room, take two photos." : "Before leaving the room, take two photos."}</p>
-    <PhotoCapture title="Overall room condition" label="Room Photo" stage={stage} category="room" acceptedEvidence={accepted("room")} onReplacementSelected={beginReplacement} onAccept={accept} />
-    <PhotoCapture title="Cables / equipment condition" label="Cable Photo" stage={stage} category="cables" acceptedEvidence={accepted("cables")} onReplacementSelected={beginReplacement} onAccept={accept} />
+    <PhotoCapture title="Overall room condition" label="Room Photo" stage={stage} category="room" acceptedEvidence={accepted("room")} onReplacementSelected={beginReplacement} onAccept={accept} busy={busy} />
+    <PhotoCapture title="Cables / equipment condition" label="Cable Photo" stage={stage} category="cables" acceptedEvidence={accepted("cables")} onReplacementSelected={beginReplacement} onAccept={accept} busy={busy} />
     <button className="primary-action sticky-action" disabled={!ready || busy} onClick={onComplete}>{ready ? (continueLabel ?? `Start ${roomName} Session`) : "Add both photos to continue"}</button>
   </div>;
 }
 
-function PhotoCapture({ title, label, stage, category, acceptedEvidence, onReplacementSelected, onAccept }) {
+function PhotoCapture({ title, label, stage, category, acceptedEvidence, onReplacementSelected, onAccept, busy }) {
   const inputRef = useRef(null);
   const [candidate, setCandidate] = useState(null);
   const [error, setError] = useState(null);
@@ -211,16 +172,16 @@ function PhotoCapture({ title, label, stage, category, acceptedEvidence, onRepla
     try {
       const previewUrl = await readImage(file);
       onReplacementSelected(category);
-      setCandidate({ id: makeOperationId("evidence"), stage, category, accepted: false, acceptedAt: null, fileName: file.name, mimeType: file.type, previewUrl, availability: "AVAILABLE" });
+      setCandidate({ id: operationId(), file, stage, category, accepted: false, acceptedAt: null, fileName: file.name, mimeType: file.type, previewUrl, availability: "AVAILABLE" });
     } catch { setError("This image could not be displayed. Choose or take another photo."); }
   };
-  const usePhoto = () => { if (!candidate) return; const acceptedAt = new Date().toISOString(); onAccept({ ...candidate, accepted: true, acceptedAt }); setCandidate(null); };
+  const usePhoto = async () => { if (!candidate || busy) return; setError(null); try { await onAccept(candidate); setCandidate(null); } catch(e) { setError(e.message || "Upload failed. Try again."); } };
   return <section className={`photo-capture ${acceptedEvidence ? "photo-capture--ready" : ""}`}>
     <div className="photo-title-row"><div><span className="photo-kicker">REQUIRED PHOTO</span><h3>{title}</h3></div>{acceptedEvidence && !candidate && <span className="ready-check"><Check size={16} /> Used</span>}</div>
     <input ref={inputRef} className="visually-hidden" type="file" accept="image/*" capture="environment" onChange={selectFile} aria-label={`Take or choose ${label.toLowerCase()}`} />
-    {!displayed ? <button className="camera-action" onClick={() => inputRef.current?.click()}><Camera size={24} /> Take {label}</button> : <>
-      {displayed.previewUrl ? <div className="photo-preview-wrap"><img className="photo-preview" src={displayed.previewUrl} alt={`${label} preview`} /><span className="preview-status"><CheckCircle2 size={17} /> {candidate ? "Photo ready" : "Photo used"}</span></div> : <div className="photo-unavailable"><ImageOff size={24} /><span>Photo was captured previously but is no longer available in this browser prototype.</span></div>}
-      <div className="photo-actions"><button className="secondary-action" onClick={() => inputRef.current?.click()}><RotateCcw size={18} /> Retake</button>{candidate && <button className="primary-action" onClick={usePhoto}><Check size={18} /> Use Photo</button>}</div>
+    {!displayed ? <button className="camera-action" disabled={busy} onClick={() => inputRef.current?.click()}><Camera size={24} /> Take {label}</button> : <>
+      {displayed.previewUrl ? <div className="photo-preview-wrap"><img className="photo-preview" src={displayed.previewUrl} alt={`${label} preview`} /><span className="preview-status"><CheckCircle2 size={17} /> {candidate ? "Photo ready" : "Photo used"}</span></div> : <PrivatePhoto photo={displayed} label={label} />}
+      <div className="photo-actions"><button className="secondary-action" disabled={busy} onClick={() => inputRef.current?.click()}><RotateCcw size={18} /> Retake</button>{candidate && <button className="primary-action" disabled={busy} onClick={usePhoto}><Check size={18} /> {busy ? "Uploading…" : "Use Photo"}</button>}</div>
     </>}
     {error && <p className="field-error">{error}</p>}
   </section>;
@@ -237,9 +198,9 @@ function readImage(file) {
   });
 }
 
-function EndFlow({ flow, room, evidence, onEvidenceChange, setFlow, finish, busy }) {
+function EndFlow({ flow, room, evidence, onEvidenceChange, setFlow, finish, busy, onUpload }) {
   if (flow.step === "disposition") return <DestinationPicker includeRetain currentUser={flow.actorId} title={`What are you doing with the ${room.name} key?`} confirmLabel="Confirm & Complete Session" onConfirm={finish} busy={busy} />;
-  return <PhotoFlow stage="end" roomName={room.name} evidence={evidence} onChange={onEvidenceChange} continueLabel="Continue to Key Disposition" onComplete={() => setFlow((previous) => ({ ...previous, step: "disposition" }))} busy={busy} />;
+  return <PhotoFlow onUpload={onUpload} stage="end" roomName={room.name} evidence={evidence} onChange={onEvidenceChange} continueLabel="Continue to Key Disposition" onComplete={() => setFlow((previous) => ({ ...previous, step: "disposition" }))} busy={busy} />;
 }
 
 function MissedCheckoutFlow({ room, session, busy, confirm, close }) {
@@ -272,7 +233,7 @@ function MemberPicker({ excludedId, selected, onSelect }) { return <div classNam
 
 function AdminCorrectionFlow({ room, data, close, onConfirm, busy }) {
   const [destination, setDestination] = useState(null); const [reason, setReason] = useState("");
-  const structuralIssue = validateState(data).some((issue) => issue.roomId === room.id && issue.code !== "ACTIVE_KEY_HOLDER_MISMATCH");
+  const structuralIssue = false;
   const closing = destination?.id ? data.sessions.filter((session) => session.roomId === room.id && session.status === SESSION_STATUS.ACTIVE && (structuralIssue || destination.type !== "member" || destination.id !== session.memberId)) : [];
   return <div className="flow-content"><p className="flow-intro">Current key holder: <strong>{holderName(room.keyHolderType, room.keyHolderId)}</strong></p><HolderPicker destination={destination} setDestination={setDestination} /><label className="reason-field"><span>Reason for correction (required)</span><input value={reason} maxLength={160} onChange={(event) => setReason(event.target.value)} placeholder="Example: Key verified at SW Office" /></label>{closing.map((session) => <div className="consequence-card" key={session.id}><AlertTriangle size={22} /><p>{room.name} has an active session belonging to {memberName(session.memberId)}. This correction will close that session as incomplete and create a missing-checkout flag. Missing photos cannot be added later.</p></div>)}<div className="split-actions"><button className="secondary-action" onClick={close}>Cancel</button><button className="primary-action sticky-action" disabled={!destination?.id || !reason.trim() || busy} onClick={() => onConfirm(destination, reason)}>Confirm Correction</button></div></div>;
 }
@@ -293,6 +254,6 @@ function CustodyCard({ event, data }) {
   const room = data.rooms.find((item) => item.id === event.roomId);
   return <article className="log-row custody-log"><div className="log-time">{friendlyTime(event.timestamp)}</div><div><strong>{room?.name} custody updated</strong>{event.mode === "INCOMING" ? <><p>Reported: {holderName(event.reportedSource)} → {holderName(event.newHolder)}</p><small>Previous website record: {holderName(event.previousRecordedHolder)}</small>{event.mismatch && <span className="mismatch-label">⚠ Custody mismatch</span>}</> : <p>{holderName(event.previousRecordedHolder)} → {holderName(event.newHolder)} · {event.mode === "ADMIN_CORRECTION" ? "Admin correction" : "Outgoing"}</p>}{event.reason && <small>Reason: {event.reason}</small>}</div></article>;
 }
-function HistoryView({ data }) { return <div className="content-view"><div className="page-heading"><p className="eyebrow">ACTIVITY LOG</p><h2>History</h2></div><section className="history-section"><h3>Key / Custody History</h3>{data.custodyEvents.length ? data.custodyEvents.map((event) => <CustodyCard key={event.id} event={event} data={data} />) : <EmptyState icon={KeyRound} text="No custody events recorded yet." />}</section><section className="history-section"><h3>Session History</h3>{data.sessions.map((session) => <SessionCard key={session.id} session={session} data={data} />)}</section></div>; }
+function HistoryView({ data }) { return <div className="content-view"><div className="page-heading"><p className="eyebrow">ACTIVITY LOG</p><h2>History</h2><p className="helper">Shared retained history · approximately the last 30 days</p></div><section className="history-section"><h3>Key / Custody History</h3>{data.custodyEvents.length ? data.custodyEvents.map((event) => <CustodyCard key={event.id} event={event} data={data} />) : <EmptyState icon={KeyRound} text="No custody events recorded yet." />}</section><section className="history-section"><h3>Session History</h3>{data.sessions.map((session) => <SessionCard key={session.id} session={session} data={data} />)}</section></div>; }
 
 function EmptyState({ icon: Icon, text }) { return <div className="empty-state"><Icon size={22} /><span>{text}</span></div>; }

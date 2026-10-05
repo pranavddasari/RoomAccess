@@ -211,3 +211,4 @@ input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3p
 .reason-field input, .reason-field select { width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit; color: #f4f6ef; background: var(--panel-2); }
 .members-section .flow-panel { max-width: 480px; }
 .admin-segments { flex-wrap: wrap; }
+.saving-indicator { position: fixed; top: 8px; right: 12px; z-index: 200; background: var(--panel); border: 1px solid var(--acid); border-radius: 10px; padding: 10px 16px; }

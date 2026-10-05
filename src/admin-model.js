@@ -1,19 +1,21 @@
 import { RECOVERY_REASONS, SESSION_STATUS, roomState } from "./transitions.js";
 
+import { sharedRoomState } from "./data/shared-model.js";
+
 export let MEMBERS = ["a", "b", "c", "d"].map((letter) => ({ id: `member-${letter}`, name: `Member ${letter.toUpperCase()}` }));
 export function setMemberDirectory(members) { MEMBERS = members; }
 export const memberName = (id) => id === "admin-demo" ? "Admin Demo" : MEMBERS.find((member) => member.id === id)?.name ?? id ?? "Not recorded";
-export const holderName = (holder) => holder?.type === "member" ? memberName(holder.id) : ({ sw: "SW Office", mho: "MHO" }[holder?.id] ?? "Not recorded");
+export const holderName = (holder) => holder?.type === "member" ? memberName(holder.id) : (holder?.type === "uninitialized" ? "Key status not initialized" : { sw: "SW Office", mho: "MHO" }[holder?.id] ?? "Not recorded");
 export const friendlyTime = (timestamp) => timestamp ? new Intl.DateTimeFormat([], { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp)) : "—";
 export const reasonLabel = (reason) => RECOVERY_REASONS[reason] ?? ({ NORMAL_CHECKOUT: "Normal checkout", MISSED_CHECKOUT_SELF_REPORTED: "Member reported leaving without checkout", KEY_MOVED_DURING_ACTIVE_SESSION: "Key moved while checkout was unfinished", ADMIN_RECOVERY: "Closed during admin custody correction" }[reason] ?? reason ?? "Not recorded");
 export const newestFirst = (items, field) => [...items].sort((a, b) => (b[field] ?? "").localeCompare(a[field] ?? ""));
 
 export function overview(data) {
-  const rooms = data.rooms.map((room) => ({ ...room, ...roomState(data, room.id), openFlags: data.flags.filter((flag) => flag.roomId === room.id && flag.status === "OPEN").length }));
+  const rooms = data.rooms.map((room) => ({ ...room, ...(data.shared ? sharedRoomState(data, room.id) : roomState(data, room.id)), openFlags: data.flags.filter((flag) => flag.roomId === room.id && flag.status === "OPEN").length }));
   return {
     rooms,
     activeRooms: rooms.filter((room) => room.kind === "ACTIVE").length,
-    idleRooms: rooms.filter((room) => room.kind === "IDLE").length,
+    idleRooms: rooms.filter((room) => room.kind === "IDLE" || room.kind === "UNINITIALIZED").length,
     openFlags: data.flags.filter((flag) => flag.status === "OPEN").length,
     active: newestFirst(data.sessions.filter((session) => session.status === SESSION_STATUS.ACTIVE), "startedAt"),
     incomplete: newestFirst(data.sessions.filter((session) => session.status === SESSION_STATUS.INCOMPLETE), "closedAt"),

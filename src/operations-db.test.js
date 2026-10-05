@@ -119,3 +119,31 @@ test('Storage upload namespaces, private bucket, verified object ownership and o
  // Fresh drafts have no read permission until evidence is attached.
  assert.equal(visible.some(o=>o.name===path),false);
 });
+
+test('disable guard also catches an ACTIVE session independently of recorded custody',async()=>{
+ const sid=crypto.randomUUID();await db.query("insert into sessions(id,room_id,member_id,status) values($1,$2,$3,'ACTIVE')",[sid,rooms[4],a]);
+ // Trusted fixture creates the mismatch; public commands never create it.
+ await assert.rejects(as(db,admin,"select public.change_club_member($1,null,'DISABLED')",[a]),/Resolve this member/);
+ await db.query("update sessions set status='INCOMPLETE',closed_at=now(),closure_reason='fixture recovery',closed_by=$2 where id=$1",[sid,admin]);
+});
+test('checkout can transfer to member or office atomically; disabled recipients are rejected',async()=>{
+ await initialize(rooms[3]);let session=await start(a,rooms[3]);await endPhoto(a,rooms[3],session,'ROOM');await endPhoto(a,rooms[3],session,'CABLES');
+ await assert.rejects(command(db,a,'END',rooms[3],{session,payload:{destination:holder(b)}}),/active club member/);
+ await command(db,a,'END',rooms[3],{session,payload:{destination:holder(admin)}});
+ assert.equal((await db.query('select holder_member_id from room_key_state where room_id=$1',[rooms[3]])).rows[0].holder_member_id,admin);
+ await initialize(rooms[3]);session=await start(a,rooms[3]);await endPhoto(a,rooms[3],session,'ROOM');await endPhoto(a,rooms[3],session,'CABLES');await command(db,a,'END',rooms[3],{session,payload:{destination:mho}});
+ assert.equal((await db.query('select holder_type from room_key_state where room_id=$1',[rooms[3]])).rows[0].holder_type,'MHO');
+});
+test('Storage denies other active member evidence and rejects foreign or oversize photo objects on attachment',async()=>{
+ // Re-enable b; access denial here must come from ownership, not disabled status.
+ await as(db,admin,"select public.change_club_member($1,null,'ACTIVE')",[b]);
+ assert.equal((await as(db,b,'select * from storage.objects')).rows.length,0);
+ assert.equal((await as(db,b,"select * from sessions where status<>'ACTIVE'")).rows.length,0);
+ const sid=crypto.randomUUID(),roomPhoto=await photo(db,a,sid,'START','ROOM'),cablesPhoto=await photo(db,a,sid,'START','CABLES');
+ await initialize(rooms[4]);
+ await db.query("update storage.objects set owner_id=$1 where name=(select storage_path from photo_uploads where id=$2)",[b,roomPhoto.id]);
+ await assert.rejects(command(db,a,'START',rooms[4],{session:sid,payload:{roomPhoto,cablesPhoto}}),/valid private uploaded photo/);
+ await db.query("update storage.objects set owner_id=$1,metadata='{\"size\":600000,\"mimetype\":\"image/jpeg\"}' where name=(select storage_path from photo_uploads where id=$2)",[a,roomPhoto.id]);
+ await assert.rejects(command(db,a,'START',rooms[4],{session:sid,payload:{roomPhoto,cablesPhoto}}),/valid private uploaded photo/);
+ assert.equal((await db.query('select * from sessions where id=$1',[sid])).rows.length,0);
+});

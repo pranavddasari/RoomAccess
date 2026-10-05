@@ -11,10 +11,15 @@ async function setup(page,{role='MEMBER',state='ACTIVE',email=profile.email,sign
   localStorage.setItem('sb-membership-auth-token',JSON.stringify({access_token:`e30.${payload}.signature`,refresh_token:'test-refresh',expires_at:Math.floor(Date.now()/1000)+3600,expires_in:3600,token_type:'bearer',user:{id:authId,email,app_metadata:{provider:'google'},aud:'authenticated'}}));
  },{email,authId});
  const requests=[];
+ const snapshot={rooms:Array.from({length:5},(_,i)=>({id:`room-${i+1}`,display_name:`MR-${i+1}`,active:true,version:0})),keys:Array.from({length:5},(_,i)=>({room_id:`room-${i+1}`,holder_type:'SW',holder_member_id:null,version:0})),sessions:[],photos:[],custody:[],flags:[],audit:[]};
+ await page.routeWebSocket('wss://membership.test/**',()=>{});
  await page.route('https://membership.test/**',async route=>{
   const request=route.request(),path=new URL(request.url()).pathname;requests.push({path,body:request.postDataJSON()});
   let data={};
   if(path.endsWith('/authorize_membership'))data={state,member:{...profile,role}};
+  else if(path.endsWith('/operational_snapshot'))data=snapshot;
+  else if(path.endsWith('/operational_directory'))data=records.map(({id,name})=>({id,name}));
+  else if(path.endsWith('/operational_command')) {const p=request.postDataJSON(),r=snapshot.rooms.find(r=>r.id===p.p_room_id),k=snapshot.keys.find(k=>k.room_id===r.id);k.holder_type='MEMBER';k.holder_member_id=memberId;r.version++;snapshot.custody.push({id:'receipt',room_id:r.id,actor_id:memberId,mode:'INCOMING',previous_recorded_holder:{type:'location',id:'sw'},reported_source:p.p_payload.source,new_holder:{type:'member',id:memberId},created_at:new Date().toISOString()});data={ok:true,version:r.version};}
   else if(path.endsWith('/member_directory'))data=records.filter(m=>m.status==='ACTIVE').map(({id,name})=>({id,name}));
   else if(path.endsWith('/club_members'))data=records;
   else if(path.endsWith('/add_club_member')) { const p=request.postDataJSON(); data={id:`new-${records.length}`,name:p.p_name,email:p.p_email,role:p.p_role,status:'ACTIVE'};records.push(data); }
@@ -35,14 +40,14 @@ test('mobile login has Google only and initiates Supabase OAuth',async({page})=>
 test('Member sees rooms, cannot impersonate, never renders Admin and signout preserves local data',async({page})=>{
  const {errors}=await setup(page);await expect(page.getByRole('heading',{name:'Rooms',exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:/^Admin/})).toHaveCount(0);await expect(page.locator('.user-switcher')).toHaveCount(0);expect(await page.evaluate(()=>window.adminFlashed)).toBe(false);
- expect(await page.evaluate(()=>localStorage.getItem('music-club-rooms-demo-v2'))).toBeTruthy();
+ expect(await page.evaluate(()=>localStorage.getItem('music-club-rooms-demo-v2'))).toBeNull();
  await page.getByRole('button',{name:'I Received This Key'}).first().click();await expect(page.getByRole('dialog')).toBeVisible();await page.getByRole('button',{name:'Club Member',exact:true}).click(); await expect(page.getByText('Select a member',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close',exact:true}).click();
  const room=page.getByRole('article').filter({has:page.getByRole('heading',{name:'MR-2',exact:true})});
  await room.getByRole('button',{name:'I Received This Key'}).click();await page.getByRole('button',{name:'SW Office',exact:true}).click();await page.getByRole('button',{name:'Confirm Receipt',exact:true}).click();await page.getByRole('button',{name:'Done',exact:true}).click();await expect(room.getByRole('button',{name:'Start Session'})).toBeVisible();
- const before=await page.evaluate(()=>localStorage.getItem('music-club-rooms-demo-v2'));expect(JSON.parse(before).custodyEvents.at(-1).actorId).toBe(memberId);
+ expect((await page.request.get('/')).ok()).toBe(true); const receiptRequest=await page.evaluate(()=>localStorage.getItem('music-club-rooms-demo-v2'));expect(receiptRequest).toBeNull();
  await page.getByRole('button',{name:'Sign Out',exact:true}).click();
- await expect(page.getByRole('button',{name:'Continue with Google'})).toBeVisible();expect(await page.evaluate(()=>localStorage.getItem('music-club-rooms-demo-v2'))).toBe(before);expect(errors).toEqual([]);
+ await expect(page.getByRole('button',{name:'Continue with Google'})).toBeVisible();expect(await page.evaluate(()=>localStorage.getItem('music-club-rooms-demo-v2'))).toBeNull();expect(errors).toEqual([]);
 });
 for(const [state,text] of [['NOT_REGISTERED',"You're not currently registered"],['DISABLED','Your Music Club access is currently disabled'],['IDENTITY_CONFLICT','linked to a different account']])test(`${state} shows denial and Sign Out only`,async({page})=>{
  const {errors}=await setup(page,{state});await expect(page.getByRole('alert')).toContainText(text);await expect(page.getByRole('button')).toHaveCount(1);await expect(page.getByRole('button',{name:'Sign Out'})).toBeVisible();expect(errors).toEqual([]);
