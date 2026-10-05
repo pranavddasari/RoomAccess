@@ -1,11 +1,10 @@
 # Supabase authentication and club membership setup
 
-This milestone uses real Supabase authentication and membership. Rooms, sessions,
-keys, flags, operational audit records and photo previews remain browser-local.
-They are not shared across accounts/devices through Supabase yet. Browser-local
-records are not a production security boundary: someone with access to the browser
-can inspect/edit them. Production database permissions below apply to membership,
-not to the deferred operational tables. No credentials are included in this repo.
+Authentication and membership are configured by this guide. The subsequent shared
+operational milestone is implemented: follow [SUPABASE_OPERATIONAL_SETUP.md](SUPABASE_OPERATIONAL_SETUP.md)
+for its forward-only migrations, private photos and retention deployment. Preserve
+all existing Auth users, membership records and identity links. No credentials are
+included in this repository.
 
 ## 1. Create and migrate
 
@@ -108,7 +107,7 @@ Members offers search and All/Members/Admins/Disabled filters for the full roste
 Role and status changes refresh your own authorization immediately. Other open
 clients refresh on focus, auth changes and every minute; database permissions use
 live membership on every request, independent of JWT role caching. Sign Out clears
-the local Supabase session and preserves browser-local operational records.
+the local Supabase session and does not delete shared operational records.
 
 ## 6. Security and database verification
 
@@ -121,7 +120,7 @@ identity link, creation timestamps or audit facts.
 
 RLS permits ACTIVE members to read their own row, and ACTIVE admins to read the
 roster and membership audit. Unknown/disabled users get no rows. An active member
-can use `member_directory` to read only ACTIVE IDs/names for local key transfers.
+can use `member_directory` to read only ACTIVE IDs/names for key transfers.
 Roles/emails are not exposed by that directory. `authorize_membership` returns
 only the caller's verified matching membership. All definer functions use empty
 search paths and fully qualified tables. Internal write functions are not callable
@@ -159,7 +158,7 @@ verified against your configured project.
 7. Disabled account: board-contact disabled message; no directory or roster access.
 8. Promote/demote, disable/re-enable; verify snapshots in membership_audit and
    authorization changes on focus/within one minute. Test last-admin failure.
-9. Sign Out: login returns; local operational records remain. Use a 390px viewport
+9. Sign Out: login returns; shared operational records remain. Use a 390px viewport
    and confirm there is no protected Admin flash or browser console error.
 
 ## 8. Later Vercel deployment
@@ -171,7 +170,7 @@ The Google redirect remains the Supabase callback. Configure preview redirects
 only for trusted previews that you intend to allow. This milestone does not deploy
 or push anything.
 
-Operational database/photo work is deferred: see [architecture](ARCHITECTURE.md).
+Shared operational database/photo setup: see [operational guide](SUPABASE_OPERATIONAL_SETUP.md) and [architecture](ARCHITECTURE.md).
 
 ## Reproduce local checks
 
