@@ -196,3 +196,18 @@ input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3p
   .admin-summary > div { padding: 18px 22px; }
   .admin-facts { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+
+.auth-shell { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.auth-card { width: 100%; max-width: 390px; background: white; border: 1px solid #e4e4e4; border-radius: 20px; padding: 28px; }
+.auth-card h1 { font-size: 26px; margin: 12px 0 22px; }
+.auth-card p { line-height: 1.6; overflow-wrap: anywhere; }
+.auth-card button { width: 100%; margin: 12px 0; }
+.account-area { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0; }
+.account-area div { display: grid; gap: 5px; min-width: 0; }
+.account-area span { font-size: 12px; overflow-wrap: anywhere; color: #61616a; }
+.prototype-label { font-size: 12px; line-height: 1.5; color: #61616a; margin-bottom: 20px; }
+.member-email { overflow-wrap: anywhere; }
+.members-section .reason-field { margin-bottom: 14px; }
+.reason-field input, .reason-field select { width: 100%; min-height: 44px; border: 1px solid #ddd; border-radius: 8px; padding: 10px; font: inherit; background: white; }
+.members-section .flow-panel { max-width: 480px; }
+.admin-segments { flex-wrap: wrap; }

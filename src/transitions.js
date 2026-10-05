@@ -126,7 +126,7 @@ function begin(state, operationId) {
 }
 
 function validHolder(type, id) {
-  return type === "member" ? MEMBERS.has(id) : type === "location" && LOCATIONS.has(id);
+  return type === "member" ? (MEMBERS.has(id) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) : type === "location" && LOCATIONS.has(id);
 }
 
 function validDestination(type, id, actorId) {
@@ -339,7 +339,7 @@ export function recordIncomingCustody(state, command) {
   if (derived.kind === "INVALID") return failure("INVALID_ROOM_STATE", state);
   const { room, session } = derived;
   if (room.version !== expectedRoomVersion) return failure("INVALID_ROOM_STATE", state);
-  if (!MEMBERS.has(actorId) || !reportedSource || !validHolder(reportedSource.type, reportedSource.id)) return failure("INVALID_DESTINATION", state);
+  if (!validHolder("member", actorId) || !reportedSource || !validHolder(reportedSource.type, reportedSource.id)) return failure("INVALID_DESTINATION", state);
   if (reportedSource.type === "member" && reportedSource.id === actorId) return failure("SELF_TRANSFER", state);
   if (session && session.memberId !== actorId) {
     if (!Object.hasOwn(RECOVERY_REASONS, recoveryReason)) return failure("RECOVERY_REASON_REQUIRED", state);

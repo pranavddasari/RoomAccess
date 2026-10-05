@@ -3,6 +3,9 @@ import { AlertTriangle, Check, KeyRound, ShieldCheck, X } from "lucide-react";
 import { FLAG_TYPE, SESSION_STATUS } from "./transitions.js";
 import { MEMBERS, evidenceSlots, friendlyTime, holderName, matchesRecord, memberName, newestFirst, overview, reasonLabel } from "./admin-model.js";
 
+import Members from "./members.jsx";
+import { canAdmin } from "./auth-model.js";
+
 const roomName = (data, id) => data.rooms.find((room) => room.id === id)?.name ?? id;
 const flagLabel = (flag) => flag.type === FLAG_TYPE.MISSING_END_CHECKOUT ? "Missing end checkout" : "Key custody mismatch";
 const modeLabel = (mode) => ({ INCOMING: "Incoming receipt", OUTGOING: "Outgoing transfer", ADMIN_CORRECTION: "Admin correction" }[mode] ?? mode);
@@ -109,19 +112,20 @@ function RoomDetail({ room, data, resolve, openCorrection, close }) {
   </dialog>;
 }
 
-export default function AdminView({ data, issues, resetDemo, resolveFlag, openCorrection }) {
+export default function AdminView({ data, issues, resetDemo, resolveFlag, openCorrection, member, refreshAuthorization }) {
   const [section, setSection] = useState("overview");
   const [flagStatus, setFlagStatus] = useState("OPEN");
   const [historyType, setHistoryType] = useState("sessions");
   const [filters, setFilters] = useState({});
   const [selectedRoom, setSelectedRoom] = useState(null);
+  if (!canAdmin(member)) return <p role="alert">Administrator access required.</p>;
   const summary = overview(data);
   const match = (record) => matchesRecord(record, filters, data);
   const flags = newestFirst(data.flags.filter((flag) => flag.status === flagStatus && match(flag)), "createdAt");
   const history = historyType === "sessions" ? newestFirst(data.sessions.filter(match), "startedAt") : historyType === "custody" ? newestFirst(data.custodyEvents.filter(match), "timestamp") : newestFirst(data.auditEvents.filter(match), "timestamp");
   const room = summary.rooms.find((item) => item.id === selectedRoom);
-  return <div className="content-view admin-view"><div className="page-heading"><p className="eyebrow">ROOMS · KEYS · REVIEW</p><h2>Admin</h2><p className="helper">Demo admin · current state and recorded activity</p></div>
-    <Segments label="Admin sections" value={section} onChange={(value) => { setSection(value); setFilters({}); }} options={[["overview", "Overview"], ["flags", `Flags (${summary.openFlags})`], ["history", "History"]]} />
+  return <div className="content-view admin-view"><div className="page-heading"><p className="eyebrow">ROOMS · KEYS · REVIEW</p><h2>Admin</h2><p className="helper">Current browser prototype state and recorded activity</p></div>
+    <Segments label="Admin sections" value={section} onChange={(value) => { setSection(value); setFilters({}); }} options={[["overview", "Overview"], ["flags", `Flags (${summary.openFlags})`], ["history", "History"], ["members", "Members"]]} />
     {section === "overview" && <>
       <div className="admin-summary"><div><strong>{summary.activeRooms}</strong><span>Rooms Active</span></div><div><strong>{summary.idleRooms}</strong><span>Rooms Idle</span></div><div><strong>{summary.openFlags}</strong><span>Open Flags</span></div></div>
       {issues.length > 0 && <section className="admin-section"><h3>State Issues</h3>{issues.map((issue, index) => <p className="warning-card" key={index}><AlertTriangle size={20} />{issue.message}</p>)}</section>}
@@ -132,6 +136,7 @@ export default function AdminView({ data, issues, resetDemo, resolveFlag, openCo
     </>}
     {section === "flags" && <><h3>Flag Review</h3><Segments label="Flag status" value={flagStatus} onChange={setFlagStatus} options={[["OPEN", `Open (${summary.openFlags})`], ["RESOLVED", `Resolved (${data.flags.filter((flag) => flag.status === "RESOLVED").length})`]]} /><Filters data={data} value={filters} onChange={setFilters} /><div className="admin-grid">{flags.map((flag) => <FlagCard key={flag.id} flag={flag} data={data} resolve={resolveFlag} />)}</div>{!flags.length && <Empty>No {flagStatus.toLowerCase()} flags match these filters.</Empty>}</>}
     {section === "history" && <><h3>History</h3><Segments label="History type" value={historyType} onChange={(value) => { setHistoryType(value); setFilters((previous) => ({ ...previous, status: "" })); }} options={[["sessions", "Sessions"], ["custody", "Key / Custody"], ["audit", "Audit Events"]]} /><Filters data={data} value={filters} onChange={setFilters} statuses={historyType === "sessions" ? Object.values(SESSION_STATUS) : []} /><p className="helper">Newest first · {history.length} {history.length === 1 ? "record" : "records"}. Member filter includes owners and recorded participants.</p><div className="admin-grid">{history.map((record) => historyType === "sessions" ? <AdminSessionCard key={record.id} session={record} data={data} /> : historyType === "custody" ? <CustodyCard key={record.id} event={record} data={data} /> : <AuditCard key={record.id} event={record} data={data} />)}</div>{!history.length && <Empty>No records match these filters.</Empty>}</>}
+    {section === "members" && <Members refreshAuthorization={refreshAuthorization} />}
     {room && <RoomDetail room={room} data={data} resolve={resolveFlag} openCorrection={openCorrection} close={() => setSelectedRoom(null)} />}
   </div>;
 }

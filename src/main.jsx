@@ -9,12 +9,16 @@ import {
 } from "./transitions.js";
 import "./styles.css";
 import AdminView from "./admin.jsx";
+import AuthGate from "./auth.jsx";
+import { canAdmin } from "./auth-model.js";
+import { setMemberDirectory } from "./admin-model.js";
 
 const STORAGE_KEY = "music-club-rooms-demo-v2";
-const MEMBERS = [
+const FIXTURES = [
   { id: "member-a", name: "Member A" }, { id: "member-b", name: "Member B" },
   { id: "member-c", name: "Member C" }, { id: "member-d", name: "Member D" },
 ];
+let MEMBERS = FIXTURES;
 const LOCATIONS = { sw: "SW Office", mho: "Men's Hostel Office (MHO)" };
 const memberName = (id) => MEMBERS.find((member) => member.id === id)?.name ?? id;
 const holderName = (holderOrType, id) => {
@@ -39,10 +43,13 @@ function loadDemo() {
     : { data: makeInitialData(), notice: "Saved demo state was invalid, so known demo data was restored safely." };
 }
 
-function App() {
+function App({ member, directory, signOut, refresh }) {
+  MEMBERS = [...FIXTURES, ...directory];
+  setMemberDirectory(MEMBERS);
+  const isAdmin = canAdmin(member);
   const [loaded] = useState(loadDemo);
   const [data, setData] = useState(loaded.data);
-  const [currentUser, setCurrentUser] = useState("member-a");
+  const currentUser = member.id;
   const [tab, setTab] = useState("rooms");
   const [flow, setFlow] = useState(null);
   const [notice, setNotice] = useState(loaded.notice);
@@ -54,15 +61,15 @@ function App() {
     catch { setNotice("Demo state is too large for browser storage. Current page data is still available until refresh."); }
   }, [data]);
 
-  const changeUser = (memberId) => { setCurrentUser(memberId); setFlow(null); setBusy(false); setNotice(null); };
+  
   const apply = (result, onSuccess) => {
     if (!result.ok) { setNotice(result.error ?? friendlyError(result.code)); setBusy(false); return false; }
     setData(result.state); setNotice(null); setBusy(false); onSuccess?.(result.state); return true;
   };
-  const openFlow = (type, room, session = null) => setFlow({
+  const openFlow = (type, room, session = null) => { if (type === "admin-correct" && !isAdmin) return; setFlow({
     type, roomId: room.id, sessionId: session?.id ?? null, actorId: currentUser,
     roomVersion: room.version, operationId: makeOperationId(type), evidence: session?.endDraftEvidence ?? [], step: "choose",
-  });
+  }); };
 
   const start = () => {
     if (busy || flow?.actorId !== currentUser) return;
@@ -108,34 +115,36 @@ function App() {
     const result = recordIncomingCustody(data, { roomId: flow.roomId, actorId: flow.actorId, reportedSource: source, recoveryReason: flow.recoveryReason, recoveryRemarks: flow.recoveryRemarks, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
     apply(result, () => setFlow({ type: "success", title: "Key Received", roomName: room.name, detail: `Reported ${holderName(source)} → ${memberName(currentUser)}` }));
   };
-  const resolveAdminFlag = (flagId, note) => apply(resolveFlag(data, { flagId, note, operationId: makeOperationId("resolve-flag") }));
+  const resolveAdminFlag = (flagId, note) => isAdmin && apply(resolveFlag(data, { flagId, note, actorId: currentUser, operationId: makeOperationId("resolve-flag") }));
   const correctAdminCustody = (destination, reason) => {
-    if (busy) return;
+    if (busy || !isAdmin) return;
     setBusy(true);
     const room = data.rooms.find((item) => item.id === flow.roomId);
-    const result = correctCustody(data, { roomId: room.id, destination, reason, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
+    const result = correctCustody(data, { actorId: currentUser, roomId: room.id, destination, reason, operationId: flow.operationId, expectedRoomVersion: flow.roomVersion });
     apply(result, () => setFlow({ type: "success", title: "Custody Corrected", roomName: room.name, detail: `${holderName({ type: room.keyHolderType, id: room.keyHolderId })} → ${holderName(destination)}` }));
   };
-  const resetDemo = () => { localStorage.removeItem(STORAGE_KEY); setData(makeInitialData()); setCurrentUser("member-a"); setTab("rooms"); setFlow(null); setNotice("Demo data reset to the original fixtures."); setBusy(false); };
+  const resetDemo = () => { localStorage.removeItem(STORAGE_KEY); setData(makeInitialData()); setTab("rooms"); setFlow(null); setNotice("Demo data reset to the original fixtures."); setBusy(false); };
 
-  useWebMcp({ data, currentUser, changeUser, resetDemo });
+
 
   return <div className={`app-shell ${tab === "admin" ? "app-shell--admin" : ""}`}>
     <header className="topbar"><div className="brand-mark"><Music2 size={20} /></div><div><p className="eyebrow">COLLEGE MUSIC CLUB</p><h1>Music Club Rooms</h1></div></header>
+    <section className="account-area"><div><strong>{member.name}</strong><span>{member.email}</span><span>{isAdmin ? "Admin" : "Member"}</span></div><button className="text-action" onClick={signOut}>Sign Out</button></section>
+    <p className="prototype-label">Room, key and photo records are stored only in this browser. Membership is shared through Supabase.</p>
     {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice(null)} aria-label="Dismiss message"><X size={16} /></button></div>}
     <main>
-      {tab === "rooms" && <RoomsView data={data} currentUser={currentUser} changeUser={changeUser} openFlow={openFlow} />}
+      {tab === "rooms" && <RoomsView data={data} currentUser={currentUser} openFlow={openFlow} />}
       {tab === "history" && <HistoryView data={data} />}
-      {tab === "admin" && <AdminView data={data} issues={issues} resetDemo={resetDemo} resolveFlag={resolveAdminFlag} openCorrection={(room) => openFlow("admin-correct", room)} />}
+      {tab === "admin" && (isAdmin ? <AdminView data={data} issues={issues} resetDemo={resetDemo} resolveFlag={resolveAdminFlag} openCorrection={(room) => openFlow("admin-correct", room)} member={member} refreshAuthorization={refresh} /> : <p role="alert">Administrator access required.</p>)}
     </main>
-    <BottomNav tab={tab} setTab={(next) => { setTab(next); setFlow(null); }} activeCount={data.sessions.filter((session) => session.status === SESSION_STATUS.ACTIVE).length} />
-    {flow && <FlowPanel flow={flow} data={data} currentUser={currentUser} busy={busy} close={() => { setFlow(null); setBusy(false); }} setFlow={setFlow} start={start} saveEndEvidence={saveEndEvidence} finish={finish} selfRecover={selfRecover} transfer={transfer} receive={receive} correctCustody={correctAdminCustody} />}
+    <BottomNav isAdmin={isAdmin} tab={tab} setTab={(next) => { setTab(next); setFlow(null); }} activeCount={data.sessions.filter((session) => session.status === SESSION_STATUS.ACTIVE).length} />
+    {flow && (flow.type !== "admin-correct" || isAdmin) && <FlowPanel flow={flow} data={data} currentUser={currentUser} busy={busy} close={() => { setFlow(null); setBusy(false); }} setFlow={setFlow} start={start} saveEndEvidence={saveEndEvidence} finish={finish} selfRecover={selfRecover} transfer={transfer} receive={receive} correctCustody={correctAdminCustody} />}
   </div>;
 }
 
-function RoomsView({ data, currentUser, changeUser, openFlow }) {
+function RoomsView({ data, currentUser, openFlow }) {
   return <>
-    <label className="user-switcher"><span>Current user</span><select value={currentUser} onChange={(event) => changeUser(event.target.value)}>{MEMBERS.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label>
+
     <div className="section-heading"><h2>Rooms</h2><span>{data.sessions.filter((session) => session.status === SESSION_STATUS.ACTIVE).length} active</span></div>
     <section className="room-list" aria-label="Music rooms">{data.rooms.map((room) => {
       const derived = roomState(data, room.id);
@@ -146,7 +155,7 @@ function RoomsView({ data, currentUser, changeUser, openFlow }) {
         <div className="room-card__header"><h3>{room.name}</h3><span className={`status ${derived.kind === "INVALID" ? "status--error" : session ? "status--active" : "status--idle"}`}>{derived.kind === "INVALID" ? "STATE ISSUE" : session ? "SESSION ACTIVE" : "IDLE"}</span></div>
         {derived.kind === "INVALID" ? <p className="warning-text">{derived.issues[0]?.message}</p> : session ? <div className="session-summary"><strong>{memberName(session.memberId)}</strong><span>Started {friendlyTime(session.startedAt)}</span><EvidenceSummary evidence={session.startEvidence} compact /></div> : <p className="room-state">Ready for a session</p>}
         <div className="key-row"><KeyRound size={18} /><span>Key</span><strong>{holderName(room.keyHolderType, room.keyHolderId)}</strong></div>
-        {derived.kind === "INVALID" ? <p className="helper">Use Admin Demo to correct this room’s current custody.</p> : session ? ownsSession ? <div className="card-actions"><button className="primary-action danger" onClick={() => openFlow("end", room, session)}>End Session</button><button className="recovery-action" onClick={() => openFlow("missed", room, session)}>I already left without checking out</button></div> : <div className="card-actions"><p className="occupied-note">This room has an unfinished session from {memberName(session.memberId)}.</p><button className="secondary-action" onClick={() => openFlow("receive", room, session)}>I Received This Key</button></div>
+        {derived.kind === "INVALID" ? <p className="helper">Ask a club administrator to correct this room’s current custody.</p> : session ? ownsSession ? <div className="card-actions"><button className="primary-action danger" onClick={() => openFlow("end", room, session)}>End Session</button><button className="recovery-action" onClick={() => openFlow("missed", room, session)}>I already left without checking out</button></div> : <div className="card-actions"><p className="occupied-note">This room has an unfinished session from {memberName(session.memberId)}.</p><button className="secondary-action" onClick={() => openFlow("receive", room, session)}>I Received This Key</button></div>
           : ownsKey ? <div className="card-actions"><button className="primary-action" onClick={() => openFlow("start", room)}>Start Session</button><button className="text-action" onClick={() => openFlow("transfer", room)}>Transfer Key</button></div>
           : <><p className="helper">You need to have the {room.name} key before starting a session.</p><button className="secondary-action" onClick={() => openFlow("receive", room)}>I Received This Key</button></>}
       </article>;
@@ -154,11 +163,11 @@ function RoomsView({ data, currentUser, changeUser, openFlow }) {
   </>;
 }
 
-function BottomNav({ tab, setTab, activeCount }) {
+export function BottomNav({ tab, setTab, activeCount, isAdmin }) {
   return <nav className="bottom-nav" aria-label="Main navigation">
     <button className={tab === "rooms" ? "selected" : ""} onClick={() => setTab("rooms")}><Music2 size={18} /> Rooms</button>
     <button className={tab === "history" ? "selected" : ""} onClick={() => setTab("history")}><History size={18} /> History</button>
-    <button className={tab === "admin" ? "selected" : ""} onClick={() => setTab("admin")}><ShieldCheck size={18} /> Admin {activeCount > 0 && <span className="nav-count">{activeCount}</span>}</button>
+    {isAdmin && <button className={tab === "admin" ? "selected" : ""} onClick={() => setTab("admin")}><ShieldCheck size={18} /> Admin {activeCount > 0 && <span className="nav-count">{activeCount}</span>}</button>}
   </nav>;
 }
 
@@ -289,20 +298,8 @@ function HistoryView({ data }) { return <div className="content-view"><div class
 
 function EmptyState({ icon: Icon, text }) { return <div className="empty-state"><Icon size={22} /><span>{text}</span></div>; }
 
-function useWebMcp({ data, currentUser, changeUser, resetDemo }) {
-  const latest = useRef({ data, currentUser, changeUser, resetDemo }); latest.current = { data, currentUser, changeUser, resetDemo };
-  useEffect(() => {
-    const context = document.modelContext; if (!context?.registerTool) return undefined;
-    const lifecycle = new AbortController(); const register = (tool) => { try { void Promise.resolve(context.registerTool(tool, { signal: lifecycle.signal })).catch(() => {}); } catch { /* unsupported browser draft */ } };
-    register({ name: "read_music_room_demo_status", title: "Read music room demo status", description: "Read current room-session and key-custody state from the visible prototype.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: () => ({ currentUser: memberName(latest.current.currentUser), rooms: latest.current.data.rooms.map((room) => ({ room: room.name, status: room.activeSessionId ? "active" : "idle", keyHolder: holderName(room.keyHolderType, room.keyHolderId) })) }) });
-    register({ name: "switch_music_room_demo_user", title: "Switch demo user", description: "Switch the mock current user and cancel any open flow.", inputSchema: { type: "object", properties: { memberId: { type: "string", enum: MEMBERS.map((member) => member.id) } }, required: ["memberId"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ memberId }) => { if (!MEMBERS.some((member) => member.id === memberId)) throw new Error("Unknown mock member"); latest.current.changeUser(memberId); return { currentUser: memberName(memberId), openFlowCancelled: true }; } });
-    register({ name: "reset_music_room_demo", title: "Reset music room demo", description: "Restore original fixtures and clear persisted prototype state.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: () => { latest.current.resetDemo(); return { reset: true }; } });
-    return () => lifecycle.abort();
-  }, []);
-}
-
 const root = createRoot(document.getElementById("root"));
-root.render(<App />);
+root.render(<AuthGate>{props => <App key={props.member.auth_user_id} {...props} />}</AuthGate>);
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => root.unmount());

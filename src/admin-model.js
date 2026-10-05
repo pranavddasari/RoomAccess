@@ -1,6 +1,7 @@
 import { RECOVERY_REASONS, SESSION_STATUS, roomState } from "./transitions.js";
 
-export const MEMBERS = ["a", "b", "c", "d"].map((letter) => ({ id: `member-${letter}`, name: `Member ${letter.toUpperCase()}` }));
+export let MEMBERS = ["a", "b", "c", "d"].map((letter) => ({ id: `member-${letter}`, name: `Member ${letter.toUpperCase()}` }));
+export function setMemberDirectory(members) { MEMBERS = members; }
 export const memberName = (id) => id === "admin-demo" ? "Admin Demo" : MEMBERS.find((member) => member.id === id)?.name ?? id ?? "Not recorded";
 export const holderName = (holder) => holder?.type === "member" ? memberName(holder.id) : ({ sw: "SW Office", mho: "MHO" }[holder?.id] ?? "Not recorded");
 export const friendlyTime = (timestamp) => timestamp ? new Intl.DateTimeFormat([], { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp)) : "—";
