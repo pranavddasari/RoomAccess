@@ -66,6 +66,10 @@ test("incoming receipt closes another member's session and preserves source mism
   assert.equal(closed.closure.recoveryRemarks, "Room was empty when we arrived.");
   assert.deepEqual(closed.endEvidence, []);
   assert.deepEqual(closed.startEvidence, started.state.sessions[0].startEvidence);
+  const missingCheckout = result.state.flags.find((flag) => flag.type === "MISSING_END_CHECKOUT");
+  assert.equal(missingCheckout.closedBy, "member-b");
+  assert.equal(missingCheckout.recoveryReason, "PREVIOUS_BAND_LEFT");
+  assert.equal(missingCheckout.recoveryRemarks, "Room was empty when we arrived.");
   const mismatch = result.state.flags.find((flag) => flag.type === "KEY_CUSTODY_MISMATCH");
   assert.equal(mismatch.previousRecordedHolder.id, "member-a");
   assert.equal(mismatch.reportedSource.id, "member-c");
@@ -217,8 +221,10 @@ test("correction and flag resolution append audit facts without rewriting custod
   const initial = makeInitialData();
   const receipt = recordIncomingCustody(initial, { roomId: "mr-4", actorId: "member-b", reportedSource: { type: "member", id: "member-d" }, recoveryReason: "PREVIOUS_BAND_LEFT", operationId: "audit-receipt", expectedRoomVersion: 0 });
   const previousEvents = structuredClone(receipt.state.custodyEvents);
+  const previousAudit = structuredClone(receipt.state.auditEvents);
   const corrected = correctCustody(receipt.state, { roomId: "mr-4", destination: { type: "location", id: "sw" }, reason: "Verified physically", operationId: "audit-correct", expectedRoomVersion: 1 });
   assert.deepEqual(corrected.state.custodyEvents.slice(1), previousEvents);
+  assert.deepEqual(corrected.state.auditEvents.slice(1), previousAudit);
   assert.equal(corrected.state.custodyEvents[0].previousRecordedHolder.id, "member-b");
   assert.equal(corrected.state.custodyEvents[0].newHolder.id, "sw");
   assert.equal(corrected.state.custodyEvents[0].actorId, "admin-demo");
