@@ -12,7 +12,7 @@ export async function makeDatabase({ retention=false }={}) {
  create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
  create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text,name text unique,owner_id text,metadata jsonb,created_at timestamptz default now());
  alter table storage.objects enable row level security; grant usage on schema storage to authenticated; grant insert,select on storage.objects to authenticated;`);
- for(const file of ['202610050001_membership.sql','202610060001_operations.sql',...(retention?['202610060002_retention.sql']:[])])await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+ for(const file of ['202610050001_membership.sql','202610060001_operations.sql',...(retention?['202610060002_retention.sql']:[]),'202610060003_operational_hardening.sql'])await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
  for(const [name,id] of Object.entries(identities)){
   await db.query('insert into auth.users values($1,$2,now())',[id,`${name}@vitstudent.ac.in`]);
   await db.query("insert into auth.identities values($1,'google',$2)",[id,JSON.stringify({email:`${name}@vitstudent.ac.in`,email_verified:true})]);

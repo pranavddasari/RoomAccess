@@ -7,11 +7,13 @@ the cleanup function. No new browser secret is required.
 
 ## 1. Back up and migrate
 
-1. Save a database backup before production schema changes. Record the current
-   deployed frontend commit and your applied migration history.
+1. On **Supabase Free**, take a logical backup before production schema changes
+   using the procedure below. Record the deployed frontend commit and applied
+   migration history. A paid backup plan is not required.
 2. Apply `supabase/migrations/202610060001_operations.sql`, then
-   `supabase/migrations/202610060002_retention.sql`, using the trusted SQL Editor
-   or your normal Supabase CLI migration workflow. Do not rerun the membership
+   `supabase/migrations/202610060002_retention.sql`, then
+   `supabase/migrations/202610060003_operational_hardening.sql`, using the trusted
+   SQL Editor or your normal Supabase CLI migration workflow. Do not rerun the membership
    migration or rebuild the project. Each migration is transactional; run each once.
 3. Confirm `select display_name from public.rooms order by display_name` returns
    exactly MR-1 through MR-5. These are placeholder labels, not real room numbers.
@@ -21,6 +23,51 @@ the cleanup function. No new browser secret is required.
    enter a reason, and confirm. Never assume that a key is at SW.
 5. A member cannot start or claim an uninitialized key. The interface displays
    "Key status not initialized" until an administrator records physical custody.
+
+### Logical pre-migration backup on Free
+
+Run these read-only exports yourself from a trusted terminal before applying any
+migration. Install the Supabase CLI and Docker (the CLI runs `pg_dump` in a
+container). Authenticate with `supabase login`, then use
+`supabase link --project-ref YOUR_REF`; verify the selected project and enter the
+DB password at its prompt. Do not put passwords in command arguments, shell
+history, source files or Git. Keep the CLI's saved credentials private.
+
+Create a private directory **outside this checkout** and dump both application
+schema definitions and data; a default CLI dump alone does not include data:
+
+```sh
+umask 077
+music_backup_dir="$HOME/music-room-private-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$music_backup_dir"
+supabase db dump --linked --schema public,private --file "$music_backup_dir/app-schema.sql"
+supabase db dump --linked --schema public,private --data-only --use-copy --file "$music_backup_dir/app-data.sql"
+```
+
+Check both commands succeeded, inspect the schema file and confirm the data dump
+contains `club_members` and `membership_audit`. Store an encrypted off-site copy.
+Dumps contain personal membership data; never commit them or DB passwords to Git.
+Rehearse a restore into a disposable compatible database before relying on the
+backup, including membership identity links, row counts, grants and RLS. Restore
+is a separate reviewed operation, never a blind script against production.
+
+This backup primarily protects the existing **application schema and membership
+data** (`public` and `private`, including the membership coordination row). The
+CLI excludes managed `auth`, `storage` and extension schemas by default. These
+exports deliberately do not rebuild Supabase-managed Auth/Storage; membership
+UUID links depend on the preserved Auth users. A full move to another project
+needs a separate, reviewed managed-schema/data export and restore procedure;
+custom Auth/Storage triggers or policies also need explicit review. Plain
+`pg_dump` handles schema selection differently, so do not restore a raw full dump
+of managed schemas over a running Supabase project.
+
+Database dumps include only Storage metadata when explicitly exported, **never
+image bytes**. Once photos exist, back up the actual private Storage objects
+separately through an authorized Storage export/API process if recovery beyond
+retention is required. A pre-migration SQL backup cannot recover future photos.
+
+References: [Supabase CLI dump behavior](https://supabase.com/docs/reference/cli/supabase-db-dump)
+and [Free-plan exports and Storage backup limits](https://supabase.com/docs/guides/platform/backups).
 
 ## 2. Bucket and Storage policies
 
@@ -72,7 +119,12 @@ membership lock, then lock/revalidate the room/current custody/session. Unique
 partial indexing enforces one ACTIVE session per room; multiple rooms per member
 are allowed. Room versions detect old modals and competing claims. UUID operation
 IDs record request/result; an identical retry returns the original result. A reused
-ID with different actor/payload is rejected. All timestamps come from PostgreSQL.
+ID with different actor/payload is rejected. Holder display fields are ignored:
+member/location holders are validated server-side and stored as exactly `type`
+and `id`; UUID spelling is canonicalized. The directory lists only ACTIVE members,
+including preauthorized members without an Auth link. A retry of an already
+successful command still works if its recipient was subsequently disabled, while
+new transfers to that member are rejected. All timestamps come from PostgreSQL.
 
 Normal reads use RLS and a single MVCC snapshot RPC. Rooms/current keys/ACTIVE
 session summaries are visible to ACTIVE members. Terminal sessions/photos are
@@ -116,9 +168,13 @@ window.
    `supabase/config.toml` disables gateway JWT verification for this function, since
    Cron uses the explicit secret header. The handler itself rejects missing/wrong
    `x-retention-secret`. A member token or publishable key cannot invoke cleanup.
-4. Supabase supplies `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the Edge
-   runtime. They are used only there, never in Vite. Verify these are available in
-   your runtime; do not copy the service role into the frontend.
+4. Current Supabase runtimes inject `SUPABASE_URL` and `SUPABASE_SECRET_KEYS`, a
+   JSON dictionary. The handler uses its **`default` secret API key** for the
+   privileged client. Only older runtimes without that dictionary fall back to
+   injected `SUPABASE_SERVICE_ROLE_KEY`. A malformed dictionary or missing default
+   fails closed; it does not silently select the legacy key. These credentials
+   bypass RLS and stay in the Edge runtime. Never copy them into Vite, browser code,
+   Git, logs or the Cron header; Cron uses the separate RETENTION_CRON_SECRET.
 5. Test a non-destructive dry run from a trusted terminal:
 
    ```sh
@@ -130,8 +186,10 @@ window.
    ```
 
 6. Inspect the returned plan and Edge logs. Wrong/missing secret must return 401.
-   Dry run must not claim/delete any object or record. Destructive fixture tests
-   run locally; do not create artificial expired fixtures in the real project.
+   Dry run must not claim/delete any object or operational record. Planning briefly
+   takes the existing membership coordination lock (an update of its private
+   singleton row); it does not acknowledge paths or finalize deletion. Destructive
+   fixture tests run locally; do not create expired fixtures in the real project.
 7. When satisfied, manually invoke `{"dryRun":false}` using the same authenticated
    request. Inspect the summary and verify that current keys/members/ACTIVE
    sessions remain intact. Storage failures return 503; claims remain retryable.
@@ -141,8 +199,13 @@ removal, then finalize database deletion. A claim marks upload intents deleting,
 so late attachment cannot race orphan cleanup. The Edge Function removes objects
 with Storage API, never SQL DELETE on storage.objects. Only acknowledged paths
 permit evidence/session deletion. Missing already-deleted objects are acceptable
-Storage API retries. Batches are bounded to 200 paths, up to 12 batches/run; a
-large backlog safely continues on the next run. Both live and dry runs log summaries.
+Storage API retries. If acknowledgement fails after physical deletion, the queue
+remains pending; retry removes the already-missing path safely and then acknowledges
+it. If finalization fails after acknowledgement, a later run finalizes the accepted
+queue state. HTTP 500/503 must be inspected and retried; a scheduled SQL success
+alone does not prove cleanup completed. Batches are bounded to 200 paths, up to
+12 batches/run; a large backlog safely continues on the next run. Both live and
+dry runs log summaries.
 
 Unreferenced/replaced images older than 24 hours are collected, including expired
 intents where no object was ultimately uploaded. Accepted ACTIVE evidence is never
@@ -166,6 +229,10 @@ SQL session timezone controls Cron.
 2. In trusted Vault administration create:
    - `music_retention_url`: `https://YOUR_REF.supabase.co/functions/v1/retention-cleanup`
    - `music_retention_secret`: the exact same value as RETENTION_CRON_SECRET.
+   Confirm exactly one nonempty secret exists for each name and the URL belongs to
+   this project. The script checks presence; it does not validate URL ownership or
+   detect empty values. Duplicate names fail the scalar lookup; missing/wrong values
+   fail the job or HTTP authentication. Do not print decrypted values while checking.
 3. Run `supabase/retention-cron.sql`. No secret values are written into that file
    or the cron command; it reads them from Vault at execution. Reusing the job
    name updates the schedule rather than creating a duplicate.

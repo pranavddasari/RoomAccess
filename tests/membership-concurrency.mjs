@@ -28,6 +28,7 @@ try {
  insert into auth.identities values('${id}','google','{"email":"admin${i}@vitstudent.ac.in","email_verified":true}');
  insert into club_members(id,email,name,auth_user_id,role) values('${id}','admin${i}@vitstudent.ac.in','Admin ${i}','${id}','ADMIN');`);
  await psql(await readFile(new URL('../supabase/migrations/202610060001_operations.sql',import.meta.url),'utf8'));
+ await psql(await readFile(new URL('../supabase/migrations/202610060003_operational_hardening.sql',import.meta.url),'utf8'));
  const room=(await psql("select id from rooms where display_name='MR-1'")).stdout.trim();
  const call=(actor,action,version,session,payload,op=crypto.randomUUID())=>`select public.operational_command('${op}','${action}','${room}',${version},${session?"'"+session+"'":'null'},'${JSON.stringify(payload)}'::jsonb);`;
  const authenticated=(actor,sql)=>`begin; set role authenticated; select set_config('test.uid','${actor}',true); ${sql} commit;`;
